@@ -19,13 +19,12 @@ def load_pickle(file_path):
 if __name__ == '__main__':
 
     # Load real and synthetic data
-    real_data = load_pickle("data/real_dataset.pkl")
-    synthetic_data = load_pickle("data/synthetic_dataset.pkl")
+    real_data = load_pickle("data/real_dataset_10.pkl")
+    synthetic_data = load_pickle("data/synthetic_dataset_10.pkl")
 
     # Preprocess real and synthetic data
     real_data = preprocess_data(real_data, fs=512, target_duration=60)
     synthetic_data = preprocess_data(synthetic_data, fs=512, target_duration=60)
-    synthetic_data = synthetic_data.squeeze()  # Removes dimensions of size 1
 
     ##### FIDELITY ANALYSIS #####
 
@@ -79,9 +78,6 @@ if __name__ == '__main__':
     ##### DIVERSITY ANALYSIS #####
     # Initialize class
     diversity_eval = Diversity(n_components=2)
-
-    # Compute compactness and separation scores - dataset level only
-    compactness, local_separation, global_separation = diversity_eval.compute_diversity_scores(real_data, synthetic_data)
 
     # Plot PCA, t-SNE, and UMAP results
     diversity_eval.plot_pca()
