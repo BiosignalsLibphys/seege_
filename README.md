@@ -2,10 +2,6 @@
 
 A Python-based framework for evaluating synthetic EEG signals.
 
-# seege_
-
-A Python-based framework for evaluating synthetic EEG signals.
-
 <pre> ```
 
 seege/                       # Your root project folder
