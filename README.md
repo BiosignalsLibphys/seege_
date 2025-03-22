@@ -6,6 +6,8 @@ A Python-based framework for evaluating synthetic EEG signals.
 
 A Python-based framework for evaluating synthetic EEG signals.
 
+<pre> ```
+
 seege/                       # Your root project folder
 │
 ├── data/                          # 📂 Datasets
@@ -36,6 +38,8 @@ seege/                       # Your root project folder
 ├── requirements.txt        # 📦 Dependencies
 ├── setup.py                # ⚙️ Installation/config (if packaging)
 └── venv/                   # 🧪 Local environment (ignored in version control)
+
+``` </pre>
 
 
 ## Evaluation dimensions
