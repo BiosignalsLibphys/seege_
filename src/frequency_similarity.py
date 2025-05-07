@@ -229,57 +229,104 @@ class FrequencySimilarity:
 
     def plot_psd(self, real_data, synthetic_data, scale="linear", smooth=False, window_length=11, polyorder=2):
         """
-        Plots the PSD for real and synthetic data. If scale == 'linear', uses linear.
-        If scale == 'log', uses semilogy.
+        Plots the power spectral density (PSD) for real and synthetic data on a specified scale.
+
+        Parameters
+        ----------
+        real_data : list or np.ndarray
+            Real signals or a single signal.
+        synthetic_data : list or np.ndarray
+            Synthetic signals or a single signal.
+        scale : str, optional
+            Plot scale, "linear" or "log". Defaults to "linear".
+        smooth : bool, optional
+            Whether to smooth the PSD using Savitzky-Golay filter. Defaults to True.
+        window_length : int, optional
+            Window length for smoothing (must be odd). Defaults to 11.
+        polyorder : int, optional
+            Polynomial order for smoothing. Defaults to 2.
         """
         if scale not in ["linear", "log"]:
-            raise ValueError("Invalid scale. Use 'linear' or 'log'.")
+            raise ValueError("Invalid scale. Accepted values are 'linear' or 'log'.")
 
-        # If 1D signals, wrap them in lists for uniform handling
-        real_list = [real_data] if isinstance(real_data, np.ndarray) and real_data.ndim == 1 else real_data
-        synth_list = [synthetic_data] if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1 else synthetic_data
+        # Infer analysis type
+        analysis_type = "sample" if isinstance(real_data, np.ndarray) and real_data.ndim == 1 else "dataset"
 
-        # Compute PSD
-        freqs_r, psd_r, _, _ = self.compute_relative_power(real_list)
-        freqs_s, psd_s, _, _ = self.compute_relative_power(synth_list)
+        # Wrap single signals into lists
+        real_data = [real_data] if isinstance(real_data, np.ndarray) and real_data.ndim == 1 else real_data
+        synthetic_data = [synthetic_data] if isinstance(synthetic_data,
+                                                        np.ndarray) and synthetic_data.ndim == 1 else synthetic_data
 
-        # Average PSD
-        real_mean = np.mean(psd_r, axis=0) if len(psd_r) > 1 else psd_r[0]
-        real_std = np.std(psd_r, axis=0) if len(psd_r) > 1 else np.zeros_like(psd_r[0])
-        synth_mean = np.mean(psd_s, axis=0) if len(psd_s) > 1 else psd_s[0]
-        synth_std = np.std(psd_s, axis=0) if len(psd_s) > 1 else np.zeros_like(psd_s[0])
+        # Compute PSD for real and synthetic data
+        freqs_r, psd_r, _, _ = self.compute_relative_power(real_data)
+        freqs_s, psd_s, _, _ = self.compute_relative_power(synthetic_data)
 
-        freqs_real = freqs_r[0]
-        freqs_synth = freqs_s[0]
+        # Compute mean PSD and frequencies
+        real_psd = np.mean(psd_r, axis=0) if len(psd_r) > 1 else psd_r[0]
+        synthetic_psd = np.mean(psd_s, axis=0) if len(psd_s) > 1 else psd_s[0]
+        real_freqs = freqs_r[0]  # Frequencies are the same for all signals
+        synthetic_freqs = freqs_s[0]  # Frequencies are the same for all signals
 
+        # Apply smoothing if enabled
         if smooth:
-            real_mean = savgol_filter(real_mean, window_length=window_length, polyorder=polyorder)
-            synth_mean = savgol_filter(synth_mean, window_length=window_length, polyorder=polyorder)
+            real_psd = savgol_filter(real_psd, window_length=window_length, polyorder=polyorder)
+            synthetic_psd = savgol_filter(synthetic_psd, window_length=window_length, polyorder=polyorder)
 
-        plt.figure(figsize=(10, 4))
+        # Find common y-limits
+        min_y = min(real_psd.min(), synthetic_psd.min())
+        max_y = max(real_psd.max(), synthetic_psd.max())
 
-        # Plot real
+        # Ensure y-axis starts at 0.00
+        y_min = 0.00
+        y_max = max_y * 1.1  # Add some headroom
+
+        plt.figure(figsize=(12, 6))
+
         if scale == "linear":
-            plt.plot(freqs_real, real_mean, label="Real (mean PSD)")
-            plt.fill_between(freqs_real, real_mean - real_std, real_mean + real_std, alpha=0.3)
-        else:
-            plt.semilogy(freqs_real, real_mean, label="Real (mean PSD)")
-            plt.fill_between(freqs_real, real_mean - real_std, real_mean + real_std, alpha=0.3)
+            # Real data PSD (linear scale)
+            plt.subplot(1, 2, 1)
+            plt.plot(real_freqs, real_psd, color="blue", label="real data")
+            plt.xlabel("Frequency (Hz)", fontsize=15)
+            plt.ylabel("PSD ($\mu V^2$/Hz)", fontsize=15)
+            plt.xlim(0, 100)
+            plt.ylim(y_min, y_max)
+            plt.title(f"Real data PSD ({analysis_type}) - linear scale", fontsize=16)
+            plt.grid()
+            plt.legend()
 
-        # Plot synthetic
-        if scale == "linear":
-            plt.plot(freqs_synth, synth_mean, label="Synthetic (mean PSD)")
-            plt.fill_between(freqs_synth, synth_mean - synth_std, synth_mean + synth_std, alpha=0.3)
-        else:
-            plt.semilogy(freqs_synth, synth_mean, label="Synthetic (mean PSD)")
-            plt.fill_between(freqs_synth, synth_mean - synth_std, synth_mean + synth_std, alpha=0.3)
+            # Synthetic data PSD (linear scale)
+            plt.subplot(1, 2, 2)
+            plt.plot(synthetic_freqs, synthetic_psd, color="grey", label="synthetic data")
+            plt.xlabel("Frequency (Hz)", fontsize=15)
+            plt.ylabel("PSD ($\mu V^2$/Hz)", fontsize=15)
+            plt.xlim(0, 100)
+            plt.ylim(y_min, y_max)
+            plt.title(f"Synthetic data PSD ({analysis_type}) - linear scale", fontsize=16)
+            plt.grid()
+            plt.legend()
 
-        plt.xlabel("Frequency (Hz)")
-        plt.ylabel("PSD (µV^2/Hz)")
-        if scale == "log":
-            plt.yscale("log")
-        plt.title("Power Spectral Density")
-        plt.grid()
-        plt.legend()
+        elif scale == "log":
+            # Real data PSD (log scale)
+            plt.subplot(1, 2, 1)
+            plt.semilogy(real_freqs, real_psd, color="lightgreen", label="real data")
+            plt.xlabel("Frequency (Hz)", fontsize=15)
+            plt.ylabel("PSD ($\mu V^2$/Hz, Log Scale)", fontsize=15)
+            plt.xlim(0, 100)
+            # plt.ylim(max(min_y, 1e-6), y_max)  # Prevent log(0)
+            plt.title(f"Real data PSD ({analysis_type}) - log scale", fontsize=16)
+            plt.grid()
+            plt.legend()
+
+            # Synthetic data PSD (log scale)
+            plt.subplot(1, 2, 2)
+            plt.semilogy(synthetic_freqs, synthetic_psd, color="grey", label="synthetic data")
+            plt.xlabel("Frequency (Hz)", fontsize=15)
+            plt.ylabel("PSD ($\mu V^2$/Hz, Log Scale)", fontsize=15)
+            plt.xlim(0, 100)
+            # plt.ylim(max(min_y, 1e-6), y_max)  # Prevent log(0)
+            plt.title(f"Synthetic data PSD ({analysis_type}) - log scale", fontsize=16)
+            plt.grid()
+            plt.legend()
+
         plt.tight_layout()
         plt.show()
