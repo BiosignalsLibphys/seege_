@@ -73,7 +73,3 @@ from evaluation_score import compute_diversity_score
 real_data, synthetic_data = [], []
 compute_diversity_score(real_data, synthetic_data)
 ```
-# seege_
-# seege_
-# seege_
-# seege_
