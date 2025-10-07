@@ -39,23 +39,6 @@ seege/                       # Your root project folder
 
 ``` </pre>
 
-
-## Evaluation dimensions
-- Fidelity
-- Diversity
-- Privacy
-
-## Installation
-Clone the repo and install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-## Usage
-```python
-...
-```
-
 ## Evaluation dimensions
 - Fidelity
 - Diversity
