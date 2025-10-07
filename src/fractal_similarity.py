@@ -1,12 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import seaborn as sns
-from sklearn.preprocessing import StandardScaler
 from scipy.signal import detrend
 import fathon
 from fathon import fathonUtils as fu
 import neurokit2 as nk
-from scipy.stats import ttest_ind
+
 
 class FractalSimilarity:
     """
@@ -14,14 +14,12 @@ class FractalSimilarity:
 
     Methods:
     --------
-    - **DCCA (Detrended Cross-Correlation Analysis)**: Measures the correlation
+    - DCCA (Detrended Cross-Correlation Analysis): Measures the correlation
       between two signals across different scales.
-    - **MFDFA (Multifractal Detrended Fluctuation Analysis)**: Computes the
+    - MFDFA (Multifractal Detrended Fluctuation Analysis): Computes the
       multifractal spectrum of a single signal.
-    - **MFDCCA (Multifractal Detrended Cross-Correlation Analysis)**: Extends
+    - FDCCA (Multifractal Detrended Cross-Correlation Analysis): Extends
       DCCA with multifractal properties by analyzing cross-fluctuations F_xy(q).
-    - **MFDCCA2 (Alternative MFDCCA implementation)**: Uses a different
-      parameterization or approach to MFDCCA.
 
     In MFDCCA mode, we do the following:
       1) Compute cross-fluctuation F_xy(q).
@@ -29,64 +27,58 @@ class FractalSimilarity:
       3) Define p(q) = F_xy(q) / sqrt(F_x(q) * F_y(q)), then average over q.
 
     We store:
-      - ``means, stds`` : the average cross-H exponent (or single-series H).
-      - ``rho_means, rho_stds`` : correlation coefficients (for DCCA).
-      - ``Fq_means, Fq_stds`` : the average cross-fluctuation (for MFDCCA).
-      - ``deltaAlpha_means, deltaAlpha_stds`` : width of the multifractal singularity spectrum.
-      - ``p_means, p_stds`` : the MFDCCA cross-correlation ratio, averaged over q.
+      - means, std: the average cross-H exponent (or single-series H).
+      - rho_means, rho_stds: correlation coefficients (for DCCA).
+      - Fq_means, Fq_stds: the average cross-fluctuation (for MFDCCA).
+      - deltaAlpha_means, deltaAlpha_stds: width of the multifractal singularity spectrum.
+      - p_means, p_stds: the MFDCCA cross-correlation ratio, averaged over q.
 
     Example Usage:
     --------------
-    ```python
     # Generate white noise data (H=0.5)
     real_data = [np.random.randn(1000) for _ in range(5)]
 
     # Generate pink noise data (H=1)
-    synthetic_data = [np.fft.irfft(
-        np.fft.rfft(np.random.randn(1000)) / np.sqrt(np.fft.rfftfreq(1000) + 1e-10)
-    ) for _ in range(5)]
+    synthetic_data = [np.fft.irfft(np.fft.rfft(np.random.randn(1000)) / np.sqrt(np.fft.rfftfreq(1000) + 1e-10)) for _ in range(5)]
 
     # Compute fractal similarity using DCCA
     fs = FractalSimilarity(real_data, synthetic_data, method='DCCA')
-    fs.analyze()
+    fs.compute_fractal_metrics()
+    fs.plot_metrics()
 
     # Compute fractal similarity using MFDFA
     fs = FractalSimilarity(real_data, synthetic_data, method='MFDFA')
-    fs.analyze()
+    fs.compute_fractal_metrics()
 
     # Compute fractal similarity using MFDCCA
     fs = FractalSimilarity(real_data, synthetic_data, method='MFDCCA')
-    fs.analyze()
-
-    # (Optionally) Alternative MFDCCA approach
-    fs = FractalSimilarity(real_data, synthetic_data, method='MFDCCA2')
-    fs.analyze()
-    ```
+    fs.compute_fractal_metrics()
+    fs.plot_metrics()
 
     References:
     -----------
-    * Podobnik & Stanley (2008) for DCCA theory.
+    * Podobnik & Stanley (2008) for DCCA theory https://arxiv.org/pdf/0709.0281
     * Kantelhardt et al. (2002) for MFDFA.
     * Gu & Zhou (2010) for MFDCCA.
     * https://www.sciencedirect.com/science/article/pii/S2212017313006506
     """
 
-    def __init__(self, real_data, synthetic_data, method='DCCA', q_range=np.arange(-5,5,0.1)):
+    def __init__(self, real_data, synthetic_data, method='DCCA', q_range=np.arange(-5,5,0.1), n_jobs=-1):
         """
         Initializes the FractalSimilarity class with real and synthetic signal data.
 
         Parameters
         ----------
-        real_data : list or np.ndarray
-            List/array of real signals (2D: a list of 1D arrays).
-        synthetic_data : list or np.ndarray
-            List/array of synthetic signals (2D: a list of 1D arrays).
+        real_data : array
+            1D (T,) or 2D (N x T) real signals.
+        synthetic_data : array
+            1D (T,) or 2D (N x T) synthetic signals.
+
         method : str, optional (default='DCCA')
             The fractal analysis method to use. Options:
               - 'DCCA' (Detrended Cross-Correlation Analysis)
               - 'MFDFA' (Multifractal Detrended Fluctuation Analysis)
               - 'MFDCCA' (Multifractal Detrended Cross-Correlation Analysis)
-              - 'MFDCCA2' (Alternative MFDCCA implementation)
         q_range : np.ndarray, optional
             Range of q values for multifractal analysis (used in MFDFA, MFDCCA, etc.).
             Default is np.arange(-5,5,0.1).
@@ -95,6 +87,7 @@ class FractalSimilarity:
         self.synthetic_data = synthetic_data
         self.method = method
         self.q_range = q_range
+        self.n_jobs = n_jobs
 
         # For labeling bar plots (DCCA or MFDCCA)
         self.categories = ['real vs real', 'real vs synthetic', 'synthetic vs synthetic']
@@ -117,16 +110,14 @@ class FractalSimilarity:
         self.p_means = None
         self.p_stds = None
 
-    def analyze(self):
+    def compute_fractal_metrics(self):
         """
         Perform the selected fractal analysis method and produce relevant
-        plots/results. Calls one of the internal methods based on self.method.
+        results. Calls one of the internal methods based on self.method.
         """
         if self.method == 'DCCA':
             self._dcca_analyze()
             self._print_results()
-            self.plot_hurst_correlation()
-            self.plot_rho_correlation()
 
         elif self.method == 'MFDFA':
             self._mfdfa_analyze()
@@ -136,35 +127,60 @@ class FractalSimilarity:
         elif self.method == 'MFDCCA':
             self._mfdcca_analyze()
             self._print_results()
-            self.plot_hurst_correlation()
-            self.plot_p_correlation()
-
-        elif self.method == 'MFDCCA2':
-            # Alternative MFDCCA approach
-            self._mfdcca_analyze2()
-            self._print_results()
-            self.plot_hurst_correlation()
 
         else:
-            raise ValueError("Invalid method. Choose 'DCCA', 'MFDFA', 'MFDCCA', or 'MFDCCA2'.")
+            raise ValueError("Invalid method. Choose 'DCCA', 'MFDFA' or 'MFDCCA'")
+
+    def plot_metrics(self):
+        """
+        Perform the selected fractal analysis method and produce relevant
+        plots. Calls one of the internal methods based on self.method.
+        """
+        if self.method == 'DCCA':
+            self.plot_hurst_correlation()
+            self.plot_rho_correlation()
+
+        elif self.method == 'MFDFA':
+            raise ValueError("Invalid method. This method does not produce plots.")
+
+        elif self.method == 'MFDCCA':
+            self.plot_hurst_correlation()
+            self.plot_p_correlation()
+            self.plot_Fq_correlation()
+            self.plot_deltaAlpha()
+
+        else:
+            raise ValueError("Invalid method. Choose 'DCCA' or 'MFDCCA'")
 
     # ---------------------------------------------------------------------
     # Plotting
     # ---------------------------------------------------------------------
-
+    def _set_plot_style(self):
+        """Apply Arial fonts and journal-compliant sizes to the next figure."""
+        mpl.rcParams.update({
+            "font.family": "Arial",
+            "font.size": 15,  # default for everything below title
+            "axes.titlesize": 20,
+            "axes.labelsize": 15,
+            "xtick.labelsize": 15,
+            "ytick.labelsize": 15,
+            "legend.fontsize": 15,
+        })
     def plot_hurst_correlation(self):
-        """Plot the average H exponents for each pair category, with error bars."""
+        """Plot the average cross Hurst exponents for each pair category, with error bars."""
         if not self.means:
             print("No H exponents to plot.")
             return
 
+        # Set plot style
+        self._set_plot_style()
         plt.figure(figsize=(8,5))
-        sns.barplot(x=self.categories, y=self.means, capsize=0.2,
+        sns.barplot(x=self.categories, y=self.means, capsize=0.2, hue=self.categories,
                     palette=['lightskyblue','limegreen','grey'], legend=False)
         plt.errorbar(x=self.categories, y=self.means, yerr=self.stds,
                      fmt='none', capsize=5, color='black')
-        plt.ylabel('Mean Hurst Exponent (H)', fontsize=13)
-        plt.title(f'{self.method} Mean H Exponents', fontsize=15)
+        plt.ylabel('Mean cross Hurst exponent ($\overline{H}_{xy})$ $q \in [–5, 5]$', fontsize=15)
+        plt.title(rf'{self.method} mean cross Hurst exponent $(\overline{{H}}_{{xy}})$', fontsize=20)
         plt.gca().spines['top'].set_visible(False)
         plt.gca().spines['right'].set_visible(False)
         plt.gca().spines['left'].set_visible(False)
@@ -173,18 +189,19 @@ class FractalSimilarity:
         plt.show()
 
     def plot_rho_correlation(self):
-        """Bar plot of correlation coefficients (rho), typically for DCCA or MFDCCA if computed."""
+        """Bar plot of correlation coefficients (rho) for DCCA."""
         if not self.rho_means:
             print("No correlation coefficients available to plot.")
             return
-
+        # Set plot style
+        self._set_plot_style()
         plt.figure(figsize=(8,5))
-        sns.barplot(x=self.categories, y=self.rho_means, capsize=0.2,
+        sns.barplot(x=self.categories, y=self.rho_means, capsize=0.2, hue=self.categories,
                     palette=['lightskyblue','limegreen','grey'], legend=False)
         plt.errorbar(x=self.categories, y=self.rho_means, yerr=self.rho_stds,
                      fmt='none', capsize=5, color='black')
-        plt.ylabel(f'{self.method} mean rho', fontsize=13)
-        plt.title(f'Mean {self.method} Correlation Coefficients', fontsize=15)
+        plt.ylabel(rf'Mean correlation coefficients ($\bar{{\rho}}$)', fontsize=15)
+        plt.title(rf'{self.method} mean correlation coefficients ($\bar{{\rho}}$)', fontsize=20)
         plt.gca().spines['top'].set_visible(False)
         plt.gca().spines['right'].set_visible(False)
         plt.gca().spines['left'].set_visible(False)
@@ -197,14 +214,54 @@ class FractalSimilarity:
         if not self.p_means:
             print("No p(q) values available to plot.")
             return
-
+        # Set plot style
+        self._set_plot_style()
         plt.figure(figsize=(8,5))
-        sns.barplot(x=self.categories, y=self.p_means, capsize=0.2,
+        sns.barplot(x=self.categories, y=self.p_means, capsize=0.2, hue=self.categories,
                     palette=['lightskyblue','limegreen','grey'], legend=False)
         plt.errorbar(x=self.categories, y=self.p_means, yerr=self.p_stds,
                      fmt='none', capsize=5, color='black')
-        plt.ylabel(r'MFDCCA p(q) (Avg over q)', fontsize=13)
-        plt.title('Comparison of MFDCCA cross-correlation p(q)', fontsize=15)
+        plt.ylabel(r'Mean cross-correlation $\langle p(q)\rangle$ $q \in [–5, 5]$', fontsize=15)
+        plt.title(r'MFDCCA mean cross-correlation $\langle p(q)\rangle$', fontsize=20)
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+        plt.gca().spines['left'].set_visible(False)
+        plt.gca().spines['bottom'].set_visible(False)
+        plt.tight_layout()
+        plt.show()
+
+    def plot_Fq_correlation(self):
+        """Bar plot of the mean Fxy(q) for MFDCCA cross-fluctuation if computed."""
+        if not self.Fq_means:
+            print("No F_xy(q) values to plot.")
+            return
+        self._set_plot_style()
+        plt.figure(figsize=(8, 5))
+        sns.barplot(x=self.categories, y=self.Fq_means, capsize=0.2, hue=self.categories,
+                    palette=['lightskyblue', 'limegreen', 'grey'], legend=False)
+        plt.errorbar(self.categories, self.Fq_means, yerr=self.Fq_stds,
+                     fmt='none', capsize=5, color='black')
+        plt.ylabel(r'Mean cross-fluctuation $\langle F_{xy}(q) \rangle$ $q \in [–5, 5]$', fontsize=15)
+        plt.title(r'MFDCCA mean cross-fluctuation $\langle F_{xy}(q) \rangle$', fontsize=20)
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+        plt.gca().spines['left'].set_visible(False)
+        plt.gca().spines['bottom'].set_visible(False)
+        plt.tight_layout()
+        plt.show()
+
+    def plot_deltaAlpha(self):
+        if not self.deltaAlpha_means:
+            print("No Δα values to plot.")
+            return
+        self._set_plot_style()
+        plt.figure(figsize=(8, 5))
+        sns.barplot(x=self.categories, y=self.deltaAlpha_means, capsize=0.2, hue=self.categories,
+                    palette=['lightskyblue', 'limegreen', 'grey'], legend=False)
+        plt.errorbar(self.categories, self.deltaAlpha_means, yerr=self.deltaAlpha_stds,
+                     fmt='none', capsize=5, color='black')
+        plt.ylabel(r'Spectrum width ($\Delta\alpha$) $q \in [–5, 5]$', fontsize=15)
+        plt.title('MFDCCA spectrum width (Δα)', fontsize=20)
         plt.gca().spines['top'].set_visible(False)
         plt.gca().spines['right'].set_visible(False)
         plt.gca().spines['left'].set_visible(False)
@@ -248,7 +305,18 @@ class FractalSimilarity:
         """
         Print the mean values for the three pairings (or two categories in MFDFA).
         """
-        print(f"\nResults for {self.method}:")
+        if self.method == 'DCCA':
+            print("\nDCCA Hurst Exponent (Hxy):")
+            for cat, m, s in zip(self.categories, self.means, self.stds):
+                print(f"  {cat}: {m:.4f} ± {s:.4f}")
+
+            if self.rho_means is not None:
+                print("\nDCCA Cross-Correlation Coefficient (ρ) :")
+                for cat, m, s in zip(self.categories, self.rho_means, self.rho_stds):
+                    print(f"  {cat}: {m:.4f} ± {s:.4f}")
+            return
+
+        print(f"\n{self.method} Hurst Exponent:")
         for category, mean_val, std_val in zip(self.categories, self.means, self.stds):
             print(f"  {category}: Mean = {mean_val:.4f}, Std = {std_val:.4f}")
 
@@ -281,8 +349,17 @@ class FractalSimilarity:
                 H_rr.append(H)
 
                 # correlation
+                def _mean_rho(rho_vals):
+                    rho_vals = np.asarray(rho_vals)
+                    rho_vals = rho_vals[np.isfinite(rho_vals)]
+                    if rho_vals.size == 0:
+                        return np.nan
+                    z = np.arctanh(np.clip(rho_vals, -0.999999, 0.999999))
+                    return np.tanh(np.nanmean(z))
+
+
                 rho = dcca.computeRho(wins, polOrd=1)
-                rho_rr.append(np.mean(rho[1]))
+                rho_rr.append(_mean_rho(rho[1]))
 
         # synthetic-synthetic
         for i in range(len(pre_s)):
@@ -299,7 +376,7 @@ class FractalSimilarity:
                 H_ss.append(H)
 
                 rho = dcca.computeRho(wins, polOrd=1)
-                rho_ss.append(np.mean(rho[1]))
+                rho_ss.append(_mean_rho(rho[1]))
 
         # real-synthetic
         for xr in pre_r:
@@ -316,7 +393,7 @@ class FractalSimilarity:
                 H_rs.append(H)
 
                 rho = dcca.computeRho(wins, polOrd=1)
-                rho_rs.append(np.mean(rho[1]))
+                rho_rs.append(_mean_rho(rho[1]))
 
         # fallback if empty
         if not H_rr: H_rr=[np.nan]; rho_rr=[np.nan]
@@ -504,7 +581,7 @@ class FractalSimilarity:
         print(f"  real vs synthetic:   {self.Fq_means[1]:.4f} ± {self.Fq_stds[1]:.4f}")
         print(f"  synthetic vs synthetic: {self.Fq_means[2]:.4f} ± {self.Fq_stds[2]:.4f}")
 
-        print("\nWidth of Singularity Spectrum (Δα):")
+        print("\nMFDCCA Width of Singularity Spectrum (Δα):")
         print(f"  real vs real:        {self.deltaAlpha_means[0]:.4f} ± {self.deltaAlpha_stds[0]:.4f}")
         print(f"  real vs synthetic:   {self.deltaAlpha_means[1]:.4f} ± {self.deltaAlpha_stds[1]:.4f}")
         print(f"  synthetic vs synthetic: {self.deltaAlpha_means[2]:.4f} ± {self.deltaAlpha_stds[2]:.4f}")
@@ -514,70 +591,4 @@ class FractalSimilarity:
         print(f"  real vs synthetic:   {self.p_means[1]:.4f} ± {self.p_stds[1]:.4f}")
         print(f"  synthetic vs synthetic: {self.p_means[2]:.4f} ± {self.p_stds[2]:.4f}")
 
-    # ---------------------------------------------------------------------
-    # MFDCCA2
-    # ---------------------------------------------------------------------
-    def _mfdcca_analyze2(self):
-        """
-        Alternative MFDCCA approach, parameterization, or polynomial order, etc.
-        The logic is similar to _mfdcca_analyze but may differ in details.
-        """
-        pre_r = self._preprocess_signals(self.real_data)
-        pre_s = self._preprocess_signals(self.synthetic_data)
 
-        H_rr, H_rs, H_ss = [], [], []
-
-        # real-real
-        for i in range(len(pre_r)):
-            for j in range(i+1, len(pre_r)):
-                a = fu.toAggregated(pre_r[i])
-                b = fu.toAggregated(pre_r[j])
-                mm = fathon.MFDCCA(a, b)
-                wins = self._get_win_sizes(len(a))
-                if len(wins)<4:
-                    continue
-
-                n, F = mm.computeFlucVec(wins, self.q_range, polOrd=1)
-                H_arr, _ = mm.fitFlucVec()
-                H_rr.append(np.nanmean(H_arr))
-
-        # synthetic-synthetic
-        for i in range(len(pre_s)):
-            for j in range(i+1, len(pre_s)):
-                a = fu.toAggregated(pre_s[i])
-                b = fu.toAggregated(pre_s[j])
-                mm = fathon.MFDCCA(a, b)
-                wins = self._get_win_sizes(len(a))
-                if len(wins)<4:
-                    continue
-
-                n, F = mm.computeFlucVec(wins, self.q_range, polOrd=1)
-                H_arr, _ = mm.fitFlucVec()
-                H_ss.append(np.nanmean(H_arr))
-
-        # real-synthetic
-        for xr in pre_r:
-            for xs in pre_s:
-                a = fu.toAggregated(xr)
-                b = fu.toAggregated(xs)
-                mm = fathon.MFDCCA(a, b)
-                wins = self._get_win_sizes(len(a))
-                if len(wins)<4:
-                    continue
-
-                n, F = mm.computeFlucVec(wins, self.q_range, polOrd=1)
-                H_arr, _ = mm.fitFlucVec()
-                H_rs.append(np.nanmean(H_arr))
-
-        # fallback
-        if not H_rr: H_rr=[np.nan]
-        if not H_rs: H_rs=[np.nan]
-        if not H_ss: H_ss=[np.nan]
-
-        self.means = [np.nanmean(H_rr), np.nanmean(H_rs), np.nanmean(H_ss)]
-        self.stds  = [np.nanstd(H_rr), np.nanstd(H_rs), np.nanstd(H_ss)]
-
-        print(f"{self.method} Hurst Exponent (Alternative MFDCCA):")
-        print(f"  real vs real:       {self.means[0]:.4f} ± {self.stds[0]:.4f}")
-        print(f"  real vs synthetic:  {self.means[1]:.4f} ± {self.stds[1]:.4f}")
-        print(f"  synthetic vs synthetic: {self.means[2]:.4f} ± {self.stds[2]:.4f}")
