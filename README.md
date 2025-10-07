@@ -3,7 +3,7 @@
 A Python-based framework for evaluating synthetic EEG signals.
 
 <pre> ```
-
+```
 seege/                       # Your root project folder
 │
 ├── data/                          # 📂 Datasets
@@ -17,12 +17,14 @@ seege/                       # Your root project folder
 │   ├── diversity.py         #  🧬 Diversity evaluation metrics
 │   ├── privacy.py           # 🔐 Privacy evaluation metrics
 │   ├── amplitude_similarity.py   # 📈 Amplitude similiarity metrics
+│   ├── time_similarity.py        # ⏱️ Time-domain similarity metrics (Hjorth parameters)
 │   ├── frequency_similarity.py   # 🔊 Frequency-domain similarity metrics
 │   ├── scalogram_similarity.py   #  🗺️ Scalogram similarity metrics
 │   ├── fractal_similarity.py     # 🌀 Fractal similarity metrics (e.g., MFDFA, DCCA)
 │
 │   └── validation/          # ✅ Metrics validation scripts
 │       ├── amplitude_validation.py
+│       ├── time_validation.py
 │       ├── diversity_validation.py
 │       ├── fractal_validation.py
 │       ├── frequency_validation.py
@@ -71,3 +73,7 @@ from evaluation_score import compute_diversity_score
 real_data, synthetic_data = [], []
 compute_diversity_score(real_data, synthetic_data)
 ```
+# seege_
+# seege_
+# seege_
+# seege_
