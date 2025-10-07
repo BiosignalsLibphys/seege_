@@ -1,8 +1,6 @@
 from scipy.signal import square
 from scipy.integrate import odeint
-from src.amplitude_similarity import *
-
-# ----------------- Signal Generation Functions -----------------
+from amplitude_similarity import *
 
 def generate_signals(signal_type, fs=1000, duration=1, noise_level=0.0, seed=42):
     np.random.seed(seed)
@@ -15,7 +13,7 @@ def generate_signals(signal_type, fs=1000, duration=1, noise_level=0.0, seed=42)
         noise = noise_level * np.random.randn(len(t))
         return sine + noise
     elif signal_type == "sine_shifted_20Hz":
-        return np.sin(2 * np.pi * 20 * t)
+        return np.sin(2 * np.pi * 50 * t)
     elif signal_type == "square":
         return square(2 * np.pi * 10 * t)
     elif signal_type == "white_noise":
@@ -38,7 +36,7 @@ def generate_lorenz_signal(length, dt=0.001, sigma=10, rho=28, beta=8/3):
     X = odeint(lorenz, X0, t, args=(sigma, rho, beta))
     return X[:, 0]
 
-# ----------------- FSV Threshold Interpretation -----------------
+# FSV threshold interpretation 
 
 def interpret_fsv(value):
     """
@@ -60,7 +58,7 @@ def interpret_fsv(value):
     else:
         return "Very Poor"
 
-# ----------------- Test Cases with Explicit Noise Levels -----------------
+# Test cases with explicit noise levels 
 
 test_cases = [
     ("Identical Sine Waves", "sine", "sine", 0.0, "Excellent"),
@@ -70,7 +68,7 @@ test_cases = [
     ("Lorenz vs White Noise", "lorenz", "white_noise", 0.0, "Very Poor"),
 ]
 
-# ----------------- Validation Execution -----------------
+# Validation execution 
 
 def run_validation_tests(fs=1000, duration=1):
     asim = AmplitudeSimilarity(fs)
@@ -96,7 +94,7 @@ def run_validation_tests(fs=1000, duration=1):
             print(f"  ⚠️ Differs from expected interpretation.")
             print(f"     Expected: {expected_interp}, but got: {gdm_interp}")
 
-# ----------------- Main Execution -----------------
+# Main execution
 
 if __name__ == "__main__":
     run_validation_tests()
