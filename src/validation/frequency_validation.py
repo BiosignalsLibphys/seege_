@@ -1,4 +1,4 @@
-from src.frequency_similarity import *
+from frequency_similarity import *
 
 def main_validation():
     fs = 2048
