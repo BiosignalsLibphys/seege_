@@ -1,13 +1,4 @@
-import matplotlib.pyplot as plt
-from scipy.signal import detrend
-from src.fractal_similarity import FractalSimilarity
-from src.preprocessing import *
-import pickle
-import numpy as np
-
-###############################################################################
-#                              SIGNAL GENERATORS                              #
-###############################################################################
+from fractal_similarity import *
 
 def generate_white_noise(length=10000, num_signals=10):
     """Generate white noise signals (H≈0.5)."""
@@ -38,11 +29,6 @@ def generate_brown_noise(length=10000, num_signals=10):
         brown = (brown - np.mean(brown)) / np.std(brown)
         signals.append(brown)
     return signals
-
-
-###############################################################################
-#                      VALIDATION ON KNOWN NOISE                              #
-###############################################################################
 
 def validate_fractal_properties():
     """
@@ -84,7 +70,7 @@ def validate_fractal_properties():
             for s_type in signal_types:
                 print(f"Analyzing {s_type} signals with {method}...")
                 fs = FractalSimilarity(signals[s_type], signals[s_type], method=method)
-                fs.analyze()
+                fs.compute_fractal_metrics()
 
                 key = f"{s_type}"
                 # MFDFA returns 2 categories [real, synthetic], but here we are using
@@ -105,7 +91,8 @@ def validate_fractal_properties():
 
                     try:
                         fs = FractalSimilarity(signals[type1], signals[type2], method=method)
-                        fs.analyze()
+                        fs.compute_fractal_metrics()
+                        fs.plot_metrics()
 
                         if i == j:
                             # same dataset => typically index=0 => "real vs real"
@@ -179,7 +166,7 @@ def validate_fractal_properties():
         "Brown Noise vs Brown Noise": {"H": 1.5, "Fq": 1.5, "deltaAlpha": 1.5}
     }
 
-    # ---- Summaries for MFDFA
+    # Summaries for MFDFA
     if "MFDFA" in results:
         print("\n--- MFDFA Hurst Exponents vs. Theoretical ---")
         mfdfa_res = results["MFDFA"]
@@ -189,7 +176,7 @@ def validate_fractal_properties():
                 theo_h = theoretical_values[s_type]
                 print(f"  {s_type}: H_calc={calc_h:.3f}, H_theo={theo_h:.2f}")
 
-    # ---- Summaries for DCCA
+    # Summaries for DCCA
     if "DCCA" in results:
         print("\n--- DCCA Self-Correlation Validation ---")
         dcca_res = results["DCCA"]
@@ -206,7 +193,7 @@ def validate_fractal_properties():
                     ref_rho = dcca_self_refs[pair]["rho"]
                     print(f"  {pair}: rho_calc={calc_rho:.3f}, rho_ref={ref_rho:.2f}")
 
-    # ---- Summaries for MFDCCA
+    # Summaries for MFDCCA
     if "MFDCCA" in results:
         print("\n--- MFDCCA Self-Correlation Validation ---")
         mfdcca_res = results["MFDCCA"]
@@ -235,9 +222,8 @@ def validate_fractal_properties():
     return results
 
 
-###############################################################################
-#                VALIDATION ON EEG-vs-EEG (REAL vs. SYNTH)                    #
-###############################################################################
+# VALIDATION ON EEG-vs-EEG (REAL vs. SYNTH)                    
+
 def validate_eeg_data():
     """
     Test using real EEG vs synthetic EEG signals, referencing known literature
@@ -267,17 +253,13 @@ def validate_eeg_data():
     real_data = np.array(real_data[:10])
     synthetic_data = np.array(synthetic_data[:10]).squeeze()
 
-    fs = 512
-    real_data = preprocess_data(real_data, fs=fs, target_duration=60)
-    synthetic_data = preprocess_data(synthetic_data, fs=fs, target_duration=60)
-
     print("EEG (Real) shape:", real_data.shape)
     print("EEG (Synth) shape:", synthetic_data.shape)
 
-    # ========== MFDCCA Example (multifractal cross-correlation) =========
+    # MFDCCA Example (multifractal cross-correlation) 
     print("\n-- EEG vs EEG: MFDCCA --")
     fs_mfdcca = FractalSimilarity(real_data, synthetic_data, method='MFDCCA')
-    fs_mfdcca.analyze()
+    fs_mfdcca.compute_fractal_metrics()
 
     # We can interpret these results relative to typical EEG or ECoG values:
     print("\n=== EEG/ECoG MFDCCA: Literature References ===")
