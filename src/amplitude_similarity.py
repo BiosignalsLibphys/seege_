@@ -1,8 +1,12 @@
+from matplotlib import rcParams
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import welch
 import seaborn as sns
 import pandas as pd
+
+# Set Arial as the default font
+rcParams['font.family'] = 'Arial'
 
 class AmplitudeSimilarity:
     """
@@ -22,15 +26,16 @@ class AmplitudeSimilarity:
 
     Example Usage:
     --------------
-    ```python
-    real_signal = np.sin(2 * np.pi * 10 * np.linspace(0, 1, 2048))
-    synthetic_signal = real_signal + 0.1 * np.random.randn(2048)
+    real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
+    synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
 
     asim = AmplitudeSimilarity(fs=2048)
 
-    metrics = asim.compute_metrics(real_signal, synthetic_signal)
-    asim.plot_metrics(metrics)
-    ```
+    metrics_dataset = asim.compute_metrics(real_data, synthetic_data)
+    asim.plot_metrics(metrics_dataset)
+
+    metrics_sample = asim.compute_metrics(real_data[0], synthetic_data[0])
+    asim.plot_metrics(metrics_sample)
 
     References:
     ----------
@@ -41,64 +46,133 @@ class AmplitudeSimilarity:
         """Initialize the AmplitudeSimilarity class with sampling frequency."""
         self.fs = fs
 
-    def compute_metrics(self, real_data, synthetic_data):
+    def compute_metrics(self, real_data, synthetic_data, *,
+                        mode: str = "all_vs_all",  # "zip" or "all_vs_all"
+                        nperseg: int = 256, return_per_pair: bool = False,
+                        return_details: bool = False):
         """
-        Compute ADM, FDM, GDM, and similarity score between real and synthetic signals in frequency domain.
+        Frequency-domain FSV metrics (ADM, FDM, GDM, Similarity) with zip/all-vs-all pairing.
+        Follows the original method: PSD via Welch and index-based gradients.
 
-        Parameters:
+        Parameters
         ----------
-        real_data : np.ndarray
-            Real signal(s): 1D (samples) or 2D (batch x samples).
-        synthetic_data : np.ndarray
-            Synthetic signal(s): same shape as real_data.
+        real_data, synthetic_data : array
+            1D (T,) or 2D (N x T) real and synthetic signals
 
-        Returns:
+        mode : {"zip","all_vs_all"}, default "zip"
+            Pairing strategy for batches.
+        nperseg : int, default 256
+            Welch segment length (internally clipped to the shortest signal).
+
+        Returns
         -------
         dict
-            Dictionary containing computed metrics.
+            Single pair: {"ADM","FDM","GDM","Similarity"}.
+            Batches: mean metrics; optionally per-pair list, mode and pair count.
         """
 
-        # Ensure numpy arrays
-        real_data = np.array(real_data)
-        synthetic_data = np.array(synthetic_data)
+        R = np.asarray(real_data, dtype=float)
+        S = np.asarray(synthetic_data, dtype=float)
 
-        # Handle batch processing
-        if real_data.ndim == 2 and synthetic_data.ndim == 2:
-            metrics_list = [self.compute_metrics(r, s) for r, s in zip(real_data, synthetic_data)]
+        #  Single pair
+        if R.ndim == 1 and S.ndim == 1:
+            eff_nperseg = max(8, min(nperseg, len(R), len(S)))
+            f_r, P_r = welch(R, fs=self.fs, nperseg=eff_nperseg)
+            f_s, P_s = welch(S, fs=self.fs, nperseg=eff_nperseg)
+            # align (should already match with same fs/nperseg)
+            if f_r.shape != f_s.shape or not np.allclose(f_r, f_s):
+                P_s = np.interp(f_r, f_s, P_s)
 
-            # Average each metric across batch
-            avg_metrics = {
-                key: np.mean([m[key] for m in metrics_list])
-                for key in metrics_list[0]
-            }
+            # ORIGINAL FSV: index-based gradients
+            dPr = np.gradient(P_r)
+            dPs = np.gradient(P_s)
 
-            print(f"ADM: {avg_metrics['ADM']:.3f}, FDM: {avg_metrics['FDM']:.3f}, "
-                  f"GDM: {avg_metrics['GDM']:.3f}, Similarity: {avg_metrics['Similarity']:.3f}")
+            eps = 1e-8
+            adm = float(np.mean(np.abs(P_r - P_s) / (0.5 * (P_r + P_s) + eps)))
+            fdm = float(np.mean(np.abs(dPr - dPs) / (0.5 * (np.abs(dPr) + np.abs(dPs)) + eps)))
+            gdm = float(np.sqrt(adm ** 2 + fdm ** 2))
+            sim = float(np.exp(-gdm))
 
-            return avg_metrics
+            print(f"ADM: {adm:.3f}, FDM: {fdm:.3f}, GDM: {gdm:.3f}, Similarity: {sim:.3f}  | mode: single_pair")
 
-        # 1D processing (single pair of signals)
-        f_real, psd_real = welch(real_data, fs=self.fs, nperseg=256)
-        f_synth, psd_synth = welch(synthetic_data, fs=self.fs, nperseg=256)
+            return {"ADM": adm, "FDM": fdm, "GDM": gdm, "Similarity": sim}
 
-        min_len = min(len(psd_real), len(psd_synth))
-        psd_real = psd_real[:min_len]
-        psd_synth = psd_synth[:min_len]
 
-        adm_freq = np.abs(psd_real - psd_synth) / (0.5 * (psd_real + psd_synth) + 1e-8)
-        adm = np.mean(adm_freq)
 
-        grad_real = np.gradient(psd_real)
-        grad_synth = np.gradient(psd_synth)
-        fdm_freq = np.abs(grad_real - grad_synth) / (0.5 * (np.abs(grad_real) + np.abs(grad_synth)) + 1e-8)
-        fdm = np.mean(fdm_freq)
+        # Batches
+        if R.ndim != 2 or S.ndim != 2:
+            raise ValueError("For batches, both inputs must be 2D (N x T).")
 
-        gdm = np.sqrt(adm ** 2 + fdm ** 2)
-        similarity = np.exp(-gdm)
+        nR, nS = R.shape[0], S.shape[0]
+        if nR == 0 or nS == 0:
+            raise ValueError("Need at least one real and one synthetic signal.")
 
-        print(f"ADM: {adm:.3f}, FDM: {fdm:.3f}, GDM: {gdm:.3f}, Similarity: {similarity:.3f}")
+        # Use a common nperseg so all PSDs share the same frequency grid
+        eff_nperseg = max(8, min(nperseg, R.shape[1], S.shape[1]))
 
-        return {"ADM": adm, "FDM": fdm, "GDM": gdm, "Similarity": similarity}
+        # Precompute PSDs (shared grid expected) and index-gradients
+        f_ref = None
+        R_psd, R_grad = [], []
+        for i in range(nR):
+            f_i, P_i = welch(R[i], fs=self.fs, nperseg=eff_nperseg)
+            if f_ref is None:
+                f_ref = f_i
+            R_psd.append(P_i)
+            R_grad.append(np.gradient(P_i))
+
+        S_psd, S_grad = [], []
+        for j in range(nS):
+            f_j, P_j = welch(S[j], fs=self.fs, nperseg=eff_nperseg)
+            if f_ref.shape != f_j.shape or not np.allclose(f_ref, f_j):
+                P_j = np.interp(f_ref, f_j, P_j)
+            S_psd.append(P_j)
+            S_grad.append(np.gradient(P_j))
+
+        eps = 1e-8
+
+        def _pair_metrics(i, j):
+            Pr, dPr = R_psd[i], R_grad[i]
+            Ps, dPs = S_psd[j], S_grad[j]
+            adm = float(np.mean(np.abs(Pr - Ps) / (0.5 * (Pr + Ps) + eps)))
+            fdm = float(np.mean(np.abs(dPr - dPs) / (0.5 * (np.abs(dPr) + np.abs(dPs)) + eps)))
+            gdm = float(np.sqrt(adm ** 2 + fdm ** 2))
+            sim = float(np.exp(-gdm))
+            return {"ADM": adm, "FDM": fdm, "GDM": gdm, "Similarity": sim}
+
+        # Pairing
+        per_pair = []
+        if mode == "zip":
+            N = min(nR, nS)
+            for i in range(N):
+                per_pair.append(_pair_metrics(i, i))
+        elif mode == "all_vs_all":
+            for i in range(nR):
+                for j in range(nS):
+                    per_pair.append(_pair_metrics(i, j))
+        else:
+            raise ValueError("mode must be 'zip' or 'all_vs_all'")
+
+        # Aggregate means
+        ADM_mean = float(np.mean([m["ADM"] for m in per_pair])) if per_pair else float('nan')
+        FDM_mean = float(np.mean([m["FDM"] for m in per_pair])) if per_pair else float('nan')
+        GDM_mean = float(np.mean([m["GDM"] for m in per_pair])) if per_pair else float('nan')
+        SIM_mean = float(np.mean([m["Similarity"] for m in per_pair])) if per_pair else float('nan')
+
+        print(f"ADM: {ADM_mean:.3f}, FDM: {FDM_mean:.3f}, GDM: {GDM_mean:.3f}, "
+                  f"Similarity: {SIM_mean:.3f}  | mode:{mode}, pairs:{len(per_pair)}")
+
+        amplitude_metrics = {"ADM": ADM_mean, "FDM": FDM_mean, "GDM": GDM_mean, "Similarity": SIM_mean}
+
+        if return_details:
+            amplitude_metrics.update({
+                "Pairs": len(per_pair),
+                "Mode": mode,
+                "nperseg_used": max(8, min(nperseg, real_data.shape[1], synthetic_data.shape[1]))
+            })
+        if return_per_pair:
+            amplitude_metrics["Per-pair"] = per_pair  # list of {"ADM","FDM","GDM","Similarity"}
+
+        return amplitude_metrics
 
     def plot_metrics(self, metrics):
         """
@@ -113,8 +187,10 @@ class AmplitudeSimilarity:
         plt.figure(figsize=(10, 6))
         sns.barplot(x='Metric', y='Value', hue='Metric',data=metrics_df, palette=["lightskyblue", "limegreen", "black", "grey"],legend=False)
         plt.title("Feature Selective Validation Metrics", fontsize=20, fontname='Arial')
-        plt.xlabel("Metric", fontsize=15, fontname='Arial')
-        plt.ylabel("Value", fontsize=15, fontname='Arial')
+        plt.xlabel("Metric", fontsize=16, fontname='Arial')
+        plt.ylabel("Value", fontsize=16, fontname='Arial')
         plt.ylim(0, 5)
+        plt.xticks(fontsize=15)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.show()
+
