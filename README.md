@@ -2,8 +2,8 @@
 
 A Python-based framework for evaluating synthetic EEG signals.
 
-<pre> ```
-```
+<pre> 
+
 seege/                       # Your root project folder
 │
 ├── data/                          # 📂 Datasets
@@ -37,7 +37,7 @@ seege/                       # Your root project folder
 ├── setup.py                # ⚙️ Installation/config (if packaging)
 └── venv/                   # 🧪 Local environment (ignored in version control)
 
-``` </pre>
+</pre>
 
 ## Evaluation dimensions
 - Fidelity
