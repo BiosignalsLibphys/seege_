@@ -1,8 +1,11 @@
-from scalogram_similarity import *
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+from scalogram_similarity import ScalogramSimilarity  # keep your class file name
 from typing import Dict, List, Tuple
 
 
-# Signal generation 
+# Signal generation
 
 def generate_signals(fs: int = 2048,
                      duration: float = 2.0,
@@ -92,7 +95,8 @@ def generate_signals(fs: int = 2048,
     return signals, t
 
 
-# Pairwise scalogram validation 
+
+# Pairwise scalogram validation (minor refactor + returns)
 
 def validate_scalogram_similarity():
     """
@@ -121,33 +125,36 @@ def validate_scalogram_similarity():
 
     # Define signal pairs
     pairs: List[Tuple[str, np.ndarray, np.ndarray]] = [
-        ("Identical Signals", signals["identical_1"], signals["identical_2"]),
-        ("Sine vs Small Noise", signals["sine_clean"], signals["sine_small_noise"]),
-        ("Sine vs Large Noise", signals["sine_clean"], signals["sine_large_noise"]),
-        ("Sine vs Triangle", signals["sine_clean"], signals["triangle_wave"]),
-        ("Square vs Brown", signals["square_wave"], signals["brown_noise"]),
-        ("Sine vs Powerline", signals["sine_clean"], signals["powerline_noise"]),
-        ("Sine vs Chirp", signals["sine_clean"], signals["chirp"]),
-        ("Sine vs Burst", signals["sine_clean"], signals["burst"]),
-        ("Sine vs AM Sine", signals["sine_clean"], signals["am_sine"]),
+        ("Identical signals", signals["identical_1"], signals["identical_2"]),
+        ("Sine vs small noise", signals["sine_clean"], signals["sine_small_noise"]),
+        ("Sine vs large noise", signals["sine_clean"], signals["sine_large_noise"]),
+        ("Sine vs triangle", signals["sine_clean"], signals["triangle_wave"]),
+        ("Square vs brown", signals["square_wave"], signals["brown_noise"]),
+        ("Sine vs powerline", signals["sine_clean"], signals["powerline_noise"]),
+        ("Sine vs chirp", signals["sine_clean"], signals["chirp"]),
+        ("Sine vs burst", signals["sine_clean"], signals["burst"]),
+        ("Sine vs AM sine", signals["sine_clean"], signals["am_sine"]),
         ("5 Hz vs 15 Hz", signals["sine_5hz"], signals["sine_15hz"]),
-        ("Clean vs HP-Noisy", signals["sine_clean"], signals["sine_highpass_noise"]),
+        ("Clean vs HP-moisy", signals["sine_clean"], signals["sine_highpass_noise"]),
     ]
 
     results = []
     for title, x, y in pairs:
         print(f"\nAnalyzing {title}:")
         analyzer.plot_scalograms(x, y)
-        metrics = analyzer.compute_scalogram_similarity_metrics(x, y)  # CHANGED: now returns dict
+        metrics = analyzer.compute_scalogram_similarity_metrics(x, y, mode="all_vs_all")
+
+        # Pull RS means from the structured dict
+        rs = metrics["RS Summary"]
         results.append({
             "Pair": title,
-            "SSIM": metrics["Mean SSIM"],
-            "NRMSE": metrics["Mean NRMSE"],
-            "Cosine": metrics["Mean Cosine Similarity"]
+            "SSIM": rs["SSIM mean"],
+            "NRMSE": rs["NRMSE mean"],
+            "Cosine": rs["Cosine mean"],
         })
 
     # Pretty summary
-    print("\nSummary of Scalogram Similarity Metrics")
+    print("\nSummary of Scalogram Similarity metrics")
     print("-" * 86)
     print(f"{'Signal Pair':<28} | {'SSIM':>7} | {'NRMSE':>7} | {'Cosine':>7}")
     print("-" * 86)
@@ -160,6 +167,8 @@ def validate_scalogram_similarity():
     print("3) Moderately similar:  0.50–0.93,    0.95–0.99,      0.10–0.50")
     print("4) Different:           0.10–0.50,    0.20–0.95,      0.50–1.50")
     print("5) Completely different:< 0.10,       < 0.20,         > 1.50")
+
+
 
 # Mean-scalogram validation (set-level comparison)
 
@@ -196,27 +205,28 @@ def validate_mean_scalogram_similarity():
         powerline_set.append(amp * signals["powerline_noise"])
 
     # Case 1: close cohorts (expect high similarity)
-    print("\n[Mean-Scalogram Validation] Close cohorts: Clean vs Small-Noise")
+    print("\n[Mean-scalogram validation] close cohorts: Clean vs small-noise")
     analyzer.plot_mean_scalograms(clean_set, noise_small_set,
                                   titles=("Mean real (clean)", "Mean synth (small noise)"),
                                   save="mean_scalo_close.png")
-    m_close_real = analyzer.compute_mean_scalogram(clean_set)
-    m_close_synth = analyzer.compute_mean_scalogram(noise_small_set)
+    m_close_real, _ = analyzer.compute_mean_scalogram(clean_set)
+    m_close_synth, _ = analyzer.compute_mean_scalogram(noise_small_set)
     close_metrics = _compare_two_scalograms(analyzer, m_close_real, m_close_synth)
     _print_mean_scalo_metrics(close_metrics)
 
     # Case 2: farther cohorts (expect lower similarity)
-    print("\n[Mean-Scalogram Validation] Farther cohorts: Clean vs Powerline")
+    print("\n[Mean-scalogram validation] farther cohorts: clean vs powerline")
     analyzer.plot_mean_scalograms(clean_set, powerline_set,
                                   titles=("Mean real (clean)", "Mean synth (powerline)"),
                                   save="mean_scalo_far.png")
-    m_far_real = analyzer.compute_mean_scalogram(clean_set)
-    m_far_synth = analyzer.compute_mean_scalogram(powerline_set)
+    m_far_real, _ = analyzer.compute_mean_scalogram(clean_set)
+    m_far_synth, _ = analyzer.compute_mean_scalogram(powerline_set)
     far_metrics = _compare_two_scalograms(analyzer, m_far_real, m_far_synth)
     _print_mean_scalo_metrics(far_metrics)
 
 
-# Helpers for mean-scalogram validation 
+# Helpers for mean-scalogram validation
+
 def _compare_two_scalograms(analyzer: ScalogramSimilarity,
                             A: np.ndarray,
                             B: np.ndarray) -> Dict[str, float]:
@@ -247,16 +257,97 @@ def _compare_two_scalograms(analyzer: ScalogramSimilarity,
 
 
 def _print_mean_scalo_metrics(metrics: Dict[str, float]) -> None:
-    print("Mean-Scalogram Metrics:")
+    print("Mean scalogram metrics:")
     print(f"  SSIM   : {metrics['Mean SSIM']:.4f}")
     print(f"  NRMSE  : {metrics['Mean NRMSE']:.4f}")
     print(f"  Cosine : {metrics['Mean Cosine Similarity']:.4f}")
 
-# Main execution
+def validate_burst_statistics_pairs():
+    """
+    Run burst-statistics on curated pairs to check event-level differences.
+    Uses the analyzer's internal pretty print (verbose=True).
+    """
+    fs = 2048
+    duration = 2.0
+    signals, _ = generate_signals(fs=fs, duration=duration, powerline_freq=50)
+    analyzer = ScalogramSimilarity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
+
+    pairs = [
+        ("Sine vs small noise", signals["sine_clean"], signals["sine_small_noise"]),
+        ("Sine vs burst", signals["sine_clean"], signals["burst"]),
+        ("Sine vs powerline", signals["sine_clean"], signals["powerline_noise"]),
+        ("5 Hz vs 15 Hz", signals["sine_5hz"], signals["sine_15hz"]),
+    ]
+
+    # Choose a band where bursts are expected to differ (e.g., beta)
+    band = (13.0, 30.0)
+
+    for title, x, y in pairs:
+        print(f"\n[ Burst pair validation ] {title} | band={band[0]}–{band[1]} Hz")
+        analyzer.compute_burst_statistics(
+            np.array([x]), np.array([y]),
+            band=band,
+            threshold="percentile", p=75.0,
+            min_duration_ms=100.0, merge_gap_ms=50.0, smooth_ms=50.0,
+            verbose=True
+        )
+
+
+
+# Burst-statistics validation on sets (cohorts)
+
+def validate_burst_statistics_sets():
+    """
+    Run burst-statistics on sets (cohorts) to compare distributions of event features.
+    """
+    fs = 2048
+    duration = 2.0
+    signals, _ = generate_signals(fs=fs, duration=duration, powerline_freq=50)
+    analyzer = ScalogramSimilarity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
+
+    rng = np.random.default_rng(456)
+
+    # Cohort A: clean sine (8 signals)
+    clean_set = [signals["sine_clean"] for _ in range(8)]
+
+    # Cohort B1: small-noise variations (close)
+    noise_small_set = [signals["sine_clean"] + 0.01 * rng.standard_normal(len(signals["sine_clean"])) for _ in range(8)]
+
+    # Cohort B2: powerline-contaminated (farther)
+    powerline_set = []
+    for _ in range(8):
+        amp = 0.8 + 0.4 * rng.random()
+        powerline_set.append(amp * signals["powerline_noise"])
+
+    band = (13.0, 30.0)
+
+
+    print(f"\n[ Burst set validation ] Close cohorts: Clean vs small-noise | band={band[0]}–{band[1]} Hz")
+    analyzer.compute_burst_statistics(
+        np.array(clean_set), np.array(noise_small_set),
+        band=band, threshold="percentile", p=75.0,
+        min_duration_ms=100.0, merge_gap_ms=50.0, smooth_ms=50.0,
+        verbose=True
+    )
+
+    print(f"\n[ Burst set validation ] Farther cohorts: Clean vs powerline | band={band[0]}–{band[1]} Hz")
+    analyzer.compute_burst_statistics(
+        np.array(clean_set), np.array(powerline_set),
+        band=band, threshold="percentile", p=75.0,
+        min_duration_ms=100.0, merge_gap_ms=50.0, smooth_ms=50.0,
+        verbose=True
+    )
+
 
 if __name__ == "__main__":
     # Pairwise validation (plots + table)
     validate_scalogram_similarity()
 
-    # NEW: mean-scalogram validation (plots + metrics)
+    # Mean-scalogram validation (plots + metrics)
     validate_mean_scalogram_similarity()
+
+    # Burst statistics on curated pairs
+    validate_burst_statistics_pairs()
+
+    # Burst statistics on cohorts
+    validate_burst_statistics_sets()
