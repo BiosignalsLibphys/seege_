@@ -32,6 +32,10 @@ class ScalogramSimilarity:
     # Plot mean scalograms for both datasets
     scalogram_analysis.plot_mean_scalograms(real_data, synthetic_data, save=None)
 
+    # Compute burst statistics within a frequency band
+    burst_results = scalogram_analysis.compute_burst_statistics(real_data, synthetic_data,band=(13, 30),
+    threshold="percentile", p=70.0, min_duration_ms=50.0, merge_gap_ms=50.0, smooth_ms=20.0)
+
     References:
     ----------
     [1] https://scikit-image.org/docs/stable/api/skimage.metrics.html
@@ -79,7 +83,7 @@ class ScalogramSimilarity:
             raise ValueError("Sampling frequency `fs` must be positive.")
         self.fs = fs
 
-    # ------------------------ NEW HELPERS (freq grid + intensity) ------------------------
+    # Helpers
 
     def _build_frequency_grid(self, freq_scale: str, num_freqs: int | None = None) -> np.ndarray:
         """
@@ -134,8 +138,6 @@ class ScalogramSimilarity:
         else:
             raise ValueError("Invalid db_ref.")
         return 10.0 * np.log10((power_from_mean_amp + eps) / ref)
-
-    # ------------------------------------------------------------------------------------
 
     def _convert_to_rgb(self, image, *, colormap='terrain', vmin=None, vmax=None):
         """
@@ -472,10 +474,10 @@ class ScalogramSimilarity:
 
         # Return
         scalogram_similarity_metrics = {
-            "Analysis Type": analysis_type,
-            "RS Mode": mode,
-            "RR Zip Strategy": rr_zip_strategy if mode == "zip" else "all_vs_all",
-            "SS Zip Strategy": ss_zip_strategy if mode == "zip" else "all_vs_all",
+            "Analysis type": analysis_type,
+            "RS mode": mode,
+            "RR zip strategy": rr_zip_strategy if mode == "zip" else "all_vs_all",
+            "SS zip strategy": ss_zip_strategy if mode == "zip" else "all_vs_all",
             # RS per-pair lists (kept for downstream uses)
             "Per-pair SSIM (RS)": rs_ssim,
             "Per-pair NRMSE (RS)": rs_nrmse,
@@ -483,21 +485,21 @@ class ScalogramSimilarity:
             # Means/SDs
             "RR Summary": {
                 "Pairs": len(rr_ssim),
-                "SSIM Mean": rr_ssim_m, "SSIM SD": rr_ssim_sd,
-                "NRMSE Mean": rr_nrmse_m, "NRMSE SD": rr_nrmse_sd,
-                "Cosine Mean": rr_cos_m, "Cosine SD": rr_cos_sd,
+                "SSIM mean": rr_ssim_m, "SSIM SD": rr_ssim_sd,
+                "NRMSE mean": rr_nrmse_m, "NRMSE SD": rr_nrmse_sd,
+                "Cosine mean": rr_cos_m, "Cosine SD": rr_cos_sd,
             },
             "SS Summary": {
                 "Pairs": len(ss_ssim),
-                "SSIM Mean": ss_ssim_m, "SSIM SD": ss_ssim_sd,
-                "NRMSE Mean": ss_nrmse_m, "NRMSE SD": ss_nrmse_sd,
-                "Cosine Mean": ss_cos_m, "Cosine SD": ss_cos_sd,
+                "SSIM mean": ss_ssim_m, "SSIM SD": ss_ssim_sd,
+                "NRMSE mean": ss_nrmse_m, "NRMSE SD": ss_nrmse_sd,
+                "Cosine mean": ss_cos_m, "Cosine SD": ss_cos_sd,
             },
             "RS Summary": {
                 "Pairs": len(rs_ssim),
-                "SSIM Mean": rs_ssim_m, "SSIM SD": rs_ssim_sd,
-                "NRMSE Mean": rs_nrmse_m, "NRMSE SD": rs_nrmse_sd,
-                "Cosine Mean": rs_cos_m, "Cosine SD": rs_cos_sd}
+                "SSIM mean": rs_ssim_m, "SSIM SD": rs_ssim_sd,
+                "NRMSE mean": rs_nrmse_m, "NRMSE SD": rs_nrmse_sd,
+                "Cosine mean": rs_cos_m, "Cosine SD": rs_cos_sd}
         }
 
         return scalogram_similarity_metrics
@@ -631,3 +633,241 @@ class ScalogramSimilarity:
             plt.savefig(save, bbox_inches='tight', dpi=200)
         plt.show()
         return fig
+    # Burst statistics helpers
+    def _band_mask(self, F: np.ndarray, band: tuple[float, float]) -> np.ndarray:
+        """NEW: Boolean mask for frequencies inside a band (f_low, f_high)."""
+        f_lo, f_hi = float(band[0]), float(band[1])
+        if f_lo <= 0 or f_hi <= f_lo:
+            raise ValueError("Invalid band. Use (f_low, f_high) with 0 < f_low < f_high.")
+        return (F >= f_lo) & (F <= f_hi)
+
+    def _band_envelope_from_scalogram(self, amp: np.ndarray, F: np.ndarray, band: tuple[float, float],
+                                      smooth_ms: float = 50.0) -> np.ndarray:
+        """
+        Band-limited envelope from scalogram by averaging amplitude over band rows.
+        Optionally smooth with a moving average (smooth_ms).
+        """
+        mask = self._band_mask(F, band)
+        if not np.any(mask):
+            raise ValueError(f"No scalogram rows fall inside the requested band {band}. "
+                             "Consider increasing num_freqs or adjusting band.")
+        # Average amplitude over the band (freqs x time -> time)
+        env = np.mean(amp[mask, :], axis=0)
+
+        # Optional moving-average smoothing in samples
+        if smooth_ms and smooth_ms > 0:
+            win = max(1, int(round((smooth_ms / 1000.0) * self.fs)))
+            if win > 1:
+                kernel = np.ones(win, dtype=float) / float(win)
+                env = np.convolve(env, kernel, mode="same")
+        return env
+
+    def _detect_bursts_from_envelope(self, envelope: np.ndarray, *,
+                                     threshold: str = "percentile",
+                                     p: float = 75.0,
+                                     kappa: float | None = None,
+                                     min_duration_ms: float = 100.0,
+                                     merge_gap_ms: float = 50.0):
+        """
+        Event-level burst detection on a 1D envelope.
+
+        threshold: "percentile" (use p-th percentile) OR "std" (mean + kappa*std).
+        p:         percentile (if threshold == "percentile"), e.g., 75.
+        kappa:     multiplier for std (if threshold == "std"), e.g., 1.5.
+        min_duration_ms:  discard events shorter than this.
+        merge_gap_ms:      merge two events if the gap between them is below this.
+        """
+        x = np.asarray(envelope, dtype=float)
+        if x.ndim != 1:
+            raise ValueError("Envelope must be a 1D array.")
+
+        # Threshold
+        if threshold == "percentile":
+            thr = np.percentile(x, float(p))
+        elif threshold == "std":
+            if kappa is None:
+                kappa = 1.5
+            thr = float(np.mean(x) + float(kappa) * np.std(x))
+        else:
+            raise ValueError("threshold must be 'percentile' or 'std'.")
+
+        above = (x >= thr).astype(np.int8)
+
+        # Find runs above threshold
+        # Transitions
+        d = np.diff(np.r_[0, above, 0])
+        starts = np.flatnonzero(d == 1)
+        ends   = np.flatnonzero(d == -1) - 1
+
+        # Enforce minimum duration
+        min_samples = int(round((min_duration_ms / 1000.0) * self.fs))
+        keep = []
+        for s, e in zip(starts, ends):
+            if (e - s + 1) >= max(1, min_samples):
+                keep.append((s, e))
+        events = keep
+
+        # Merge close events
+        merged = []
+        if events:
+            gap_samples = int(round((merge_gap_ms / 1000.0) * self.fs))
+            cur_s, cur_e = events[0]
+            for s, e in events[1:]:
+                if s - cur_e - 1 <= gap_samples:
+                    cur_e = e  # merge
+                else:
+                    merged.append((cur_s, cur_e))
+                    cur_s, cur_e = s, e
+            merged.append((cur_s, cur_e))
+        events = merged
+
+        # Collect stats
+        bursts = []
+        for s, e in events:
+            seg = x[s:e+1]
+            peak_amp = float(np.max(seg))
+            peak_idx = int(s + np.argmax(seg))
+            duration_s = float((e - s + 1) / self.fs)
+            bursts.append({
+                "start": int(s),
+                "end": int(e),
+                "peak_idx": int(peak_idx),
+                "peak_amp": peak_amp,
+                "duration_s": duration_s
+            })
+
+        # Inter-burst intervals (IBI)
+        ibis = []
+        for (s1, e1), (s2, e2) in zip(events, events[1:]):
+            ibis.append(float((s2 - e1 - 1) / self.fs))
+
+        total_dur_s = float(len(x) / self.fs) if len(x) else 0.0
+        total_burst_time_s = float(np.sum([(b["end"] - b["start"] + 1) for b in bursts]) / self.fs) if bursts else 0.0
+        duty_cycle = (total_burst_time_s / total_dur_s) if total_dur_s > 0 else np.nan
+        rate_hz = (len(bursts) / total_dur_s) if total_dur_s > 0 else np.nan
+
+        summary = {
+            "n_bursts": int(len(bursts)),
+            "rate_hz": float(rate_hz),
+            "mean_duration_s": float(np.mean([b["duration_s"] for b in bursts])) if bursts else 0.0,
+            "median_duration_s": float(np.median([b["duration_s"] for b in bursts])) if bursts else 0.0,
+            "mean_peak_amp": float(np.mean([b["peak_amp"] for b in bursts])) if bursts else 0.0,
+            "median_peak_amp": float(np.median([b["peak_amp"] for b in bursts])) if bursts else 0.0,
+            "mean_ibi_s": float(np.mean(ibis)) if len(ibis) > 0 else np.nan,
+            "median_ibi_s": float(np.median(ibis)) if len(ibis) > 0 else np.nan,
+            "duty_cycle": float(duty_cycle)
+        }
+        return bursts, summary, thr
+
+    def compute_burst_statistics(self, real_data, synthetic_data, *,
+                                 band=(13.0, 30.0),
+                                 threshold="percentile",
+                                 p=75.0,
+                                 kappa=None,
+                                 min_duration_ms=100.0,
+                                 merge_gap_ms=50.0,
+                                 freq_scale: str | None = None,
+                                 smooth_ms: float = 50.0,
+                                 verbose: bool = True):
+        """
+        Compute burst statistics for real and synthetic datasets using the scalogram.
+        Returns per-signal summaries and RS/RR/SS distances for each feature.
+
+        verbose: if True, prints a compact summary of results.  
+        """
+        from scipy.stats import wasserstein_distance as WD
+        import numpy as np
+
+        # Normalize inputs to 2D arrays
+        R = np.asarray(real_data, dtype=float)
+        S = np.asarray(synthetic_data, dtype=float)
+        if R.ndim == 1: R = R[np.newaxis, :]
+        if S.ndim == 1: S = S[np.newaxis, :]
+
+        # Frequency grid for scalograms
+        F = self._build_frequency_grid(freq_scale or "linear", self.num_freqs)
+
+        # Per-signal summaries
+        def _one_set(signals):
+            out = []
+            for x in signals:
+                amp, F_used = self._compute_scalogram(x, frequencies=F, return_freqs=True)
+                env = self._band_envelope_from_scalogram(amp, F_used, band, smooth_ms=smooth_ms)
+                _, summary, thr = self._detect_bursts_from_envelope(
+                    env, threshold=threshold, p=p, kappa=kappa,
+                    min_duration_ms=min_duration_ms, merge_gap_ms=merge_gap_ms
+                )
+                out.append(summary)
+            return out
+
+        R_sum = _one_set(R)
+        S_sum = _one_set(S)
+
+        # Turn dict lists into arrays per feature
+        def _stack_feature(L, key):
+            vals = [d[key] for d in L if np.isfinite(d[key])]
+            return np.array(vals, dtype=float) if len(vals) > 0 else np.array([], dtype=float)
+
+        keys = ["n_bursts", "rate_hz", "mean_duration_s", "median_duration_s",
+                "mean_peak_amp", "median_peak_amp", "mean_ibi_s", "median_ibi_s", "duty_cycle"]
+
+        # RS wasserstein
+        wd_rs = {}
+        for k in keys:
+            r = _stack_feature(R_sum, k)
+            s = _stack_feature(S_sum, k)
+            wd_rs[k] = float(WD(r, s)) if (r.size > 0 and s.size > 0) else np.nan
+
+        # RR/SS dispersion (mean absolute deviation proxy)
+        def _within_dispersion(L, key):
+            vals = _stack_feature(L, key)
+            if vals.size <= 1:
+                return np.nan
+            m = np.mean(vals)
+            return float(np.mean(np.abs(vals - m)))
+
+        wd_rr = {k: _within_dispersion(R_sum, k) for k in keys}
+        wd_ss = {k: _within_dispersion(S_sum, k) for k in keys}
+
+        if verbose:
+            def _fmt(x):
+                return "nan" if not np.isfinite(x) else f"{x:.3g}"
+            print("\n=== Burst Statistics Summary ===")
+            print(f"Band: {band[0]:.3g}–{band[1]:.3g} Hz | Threshold: {threshold}"
+                  + (f" (p={p:.0f})" if threshold == "percentile" else f" (mean+{kappa or 1.5}·SD)")
+                  + f" | min_dur={min_duration_ms} ms | merge_gap={merge_gap_ms} ms | smooth={smooth_ms} ms")
+            print(f"N_real={len(R_sum)} | N_synth={len(S_sum)}\n")
+
+            header = f"{'Feature':<18}  {'RS WD':>10}  {'RR disp':>10}  {'SS disp':>10}"
+            print(header)
+            print("-" * len(header))
+            nice = {
+                "n_bursts": "n_bursts",
+                "rate_hz": "rate_hz",
+                "mean_duration_s": "mean_dur_s",
+                "median_duration_s": "median_dur_s",
+                "mean_peak_amp": "mean_peak",
+                "median_peak_amp": "median_peak",
+                "mean_ibi_s": "mean_IBI_s",
+                "median_ibi_s": "median_IBI_s",
+                "duty_cycle": "duty_cycle"
+            }
+            for k in keys:
+                print(f"{nice[k]:<18}  {_fmt(wd_rs[k]):>10}  {_fmt(wd_rr[k]):>10}  {_fmt(wd_ss[k]):>10}")
+
+        return {
+            "band": band,
+            "threshold": threshold,
+            "percentile_p": p,
+            "kappa": kappa,
+            "min_duration_ms": min_duration_ms,
+            "merge_gap_ms": merge_gap_ms,
+            "real_per_signal": R_sum,
+            "synthetic_per_signal": S_sum,
+            "RS_WD": wd_rs,
+            "RR_dispersion": wd_rr,
+            "SS_dispersion": wd_ss
+        }
+
+
+
