@@ -13,14 +13,15 @@ seege/                       # Your root project folder
 ├── src/                     # Source code
 │   ├── __init__.py          # (optional) Make it a package if needed
 │
-│   ├── preprocessing.py     # Data loading and preprocessing utilities
-│   ├── diversity.py         #  Diversity evaluation metrics
-│   ├── privacy.py           # Privacy evaluation metrics
+│   ├── preprocessing.py          # Data loading and preprocessing utilities
 │   ├── amplitude_similarity.py   # Amplitude similiarity metrics
 │   ├── time_similarity.py        # Time-domain similarity metrics (Hjorth parameters)
 │   ├── frequency_similarity.py   # Frequency-domain similarity metrics
 │   ├── scalogram_similarity.py   #  Scalogram similarity metrics
 │   ├── fractal_similarity.py     # Fractal similarity metrics (e.g., MFDFA, DCCA)
+│   ├── diversity.py              #  Diversity evaluation metrics
+│   ├── privacy.py                # Privacy evaluation metrics
+│   ├── evaluation_score.py       #  Evaluation scores estimation for all domains and sub-domains
 │
 │   └── validation/          # Metrics validation scripts
 │       ├── amplitude_validation.py
