@@ -46,7 +46,7 @@ class FrequencySimilarity:
     overlap = 0.5  # 50%
 
     # Canonical EEG band edges (Hz)
-    band_edges = [0.5, 4, 8, 13, 30,150, 250, 500.0]
+    band_edges = [0.5, 4, 8, 13, 30, 80, 250, 500.0]
     band_names = ["Delta", "Theta", "Alpha", "Beta", "Gamma", "Ripple", "Fast Ripple"]
 
     if len(band_edges) != len(band_names) + 1:
