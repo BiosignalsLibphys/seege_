@@ -5,6 +5,7 @@ from scipy.signal import welch, savgol_filter, coherence
 from scipy.integrate import simps
 from scipy.stats import shapiro, ttest_rel, wilcoxon
 from scipy.stats import wasserstein_distance
+from sympy.physics.units import frequency
 
 # Set Arial as the default font
 rcParams['font.family'] = 'Arial'
@@ -14,7 +15,7 @@ class FrequencySimilarity:
     A class for evaluating frequency similarity between real and synthetic signals
     using Power Spectral Density (PSD) analysis and statistical tests.
 
-    This class computes relative power in different frequency bands,
+    This class computes relative power in different frequency bands including HFO,
     dominant frequencies, and performs statistical comparisons (normality,
     paired t-test / Wilcoxon). It can also compute coherence and approximate
     a Wasserstein distance in the frequency domain.
@@ -27,6 +28,7 @@ class FrequencySimilarity:
     frequency_analysis = FrequencySimilarity(fs=512)
     frequency_analysis.compare_relative_power(real_data, synthetic_data)
     frequency_analysis.spectral_coherence(real_data, synthetic_data)
+    frequency_analysis.spectral_wasserstein_distance(real_data, synthetic_data)
     frequency_analysis.plot_psd(real_data, synthetic_data, scale="linear")
 
     References:
@@ -37,15 +39,18 @@ class FrequencySimilarity:
     """
 
     # Default values definition
-    analysis_band = (0.5, 100.0)  # Hz
+    analysis_band = (0.5, 500.0)  # Hz
     win_seconds = 4.0  # Welch window length (s)
     window = 'hann'
     detrend = 'constant'
     overlap = 0.5  # 50%
 
     # Canonical EEG band edges (Hz)
-    BAND_EDGES = [0.5, 4, 8, 13, 30, 100.0]
-    BAND_NAMES = ["Delta", "Theta", "Alpha", "Beta", "Gamma"]
+    band_edges = [0.5, 4, 8, 13, 30,150, 250, 500.0]
+    band_names = ["Delta", "Theta", "Alpha", "Beta", "Gamma", "Ripple", "Fast Ripple"]
+
+    if len(band_edges) != len(band_names) + 1:
+        raise ValueError("band_edges must have len = len(band_names) + 1.")
 
     def __init__(self, fs,
                  analysis_band=analysis_band,
@@ -62,7 +67,9 @@ class FrequencySimilarity:
             Sampling frequency of the signals, by default 2048.
         """
         self.fs = fs
-        self.fmin, self.fmax = analysis_band
+        nyq = fs / 2.0
+        lo, hi = analysis_band
+        self.fmin, self.fmax = float(lo), float(min(hi, nyq))
         self.win_seconds = float(win_seconds)
         self.window = window
         self.detrend = detrend
@@ -106,16 +113,47 @@ class FrequencySimilarity:
         """
         Unified Welch PSD. Returns: (f_full, pxx_full, f_band, pxx_band).
         """
+
         fmin, fmax, win_s, wnd, dtr, ovl = self._resolve_params(
             analysis_band, win_seconds, window, detrend, overlap
         )
-        nperseg = min(len(sig), int(win_s * self.fs))
-        nperseg = max(nperseg, 8)  # guard tiny segments
-        noverlap = int(nperseg * ovl)
+        fs = self.fs
+        L = len(sig)
+        f_low = max(fmin, 1e-6)  # avoid divide-by-zero
 
-        f, pxx = welch(sig, fs=self.fs,
-                       nperseg=nperseg, noverlap=noverlap,
-                       window=wnd, detrend=dtr, scaling='density')
+        # Auto nperseg selection
+        auto = (win_seconds is None) or (isinstance(win_seconds, str) and win_seconds.lower() == "auto")
+        if auto:
+            K_cycles = 10  # cycles of the lowest freq to include
+            nperseg_target = int(np.ceil(K_cycles * fs / f_low))
+            nperseg = min(L, max(8, nperseg_target))
+        else:
+            nperseg = min(L, int(float(win_s) * fs))
+            nperseg = max(nperseg, 8)
+
+        # Overlap
+        noverlap = int(nperseg * (self.overlap if overlap is None else float(overlap)))
+        if noverlap >= nperseg:
+            noverlap = max(0, nperseg - 1)
+
+        # Ensure enough segments (shrink nperseg if needed)
+        def n_segments(L_, nseg_, ovlp_):
+            step = max(1, nseg_ - ovlp_)
+            return 1 + max(0, (L_ - nseg_) // step)
+
+        min_segments = 4
+        for shrink in (1.0, 0.75, 0.5, 0.33, 0.25):
+            n_try = max(8, int(nperseg * shrink))
+            o_try = min(int(n_try * (self.overlap if overlap is None else float(overlap))), n_try - 1)
+            if n_segments(L, n_try, o_try) >= min_segments:
+                nperseg, noverlap = n_try, o_try
+                break
+        # --------------------------------
+
+        f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=noverlap,
+                       window=(self.window if window is None else window),
+                       detrend=(self.detrend if detrend is None else detrend),
+                       scaling='density')
 
         mask = (f >= fmin) & (f <= fmax)
         f_sel, p_sel = f[mask], pxx[mask]
@@ -128,7 +166,7 @@ class FrequencySimilarity:
                                                             overlap):
         """
         Compute the relative power for different frequency bands
-        (Delta, Theta, Alpha, Beta, Gamma) and determine the dominant frequency.
+        (Delta, Theta, Alpha, Beta, Gamma, Ripple and Fast Ripple) and determine the dominant frequency.
 
         Returns:
         -------
@@ -139,7 +177,7 @@ class FrequencySimilarity:
             - dominant_freq (list): Dominant frequencies for each signal.
         """
         freqs, psd = [], []
-        rel_power = {name: [] for name in self.BAND_NAMES}
+        rel_power = {name: [] for name in self.band_names}
         dominant_freq = []
 
         # ensure iterable
@@ -150,9 +188,9 @@ class FrequencySimilarity:
             f, pxx, f_sel, p_sel = self._compute_psd(sig, analysis_band, win_seconds, window, detrend, overlap)
             total = simps(p_sel, f_sel) if f_sel.size > 1 else 0.0
 
-            for i, name in enumerate(self.BAND_NAMES):
-                lo, hi = self.BAND_EDGES[i], self.BAND_EDGES[i + 1]
-                m = self._band_mask(f_sel, lo, hi, right_closed=(i == len(self.BAND_NAMES) - 1))
+            for i, name in enumerate(self.band_names):
+                lo, hi = self.band_edges[i], self.band_edges[i + 1]
+                m = self._band_mask(f_sel, lo, hi, right_closed=(i == len(self.band_names) - 1))
                 bp = simps(p_sel[m], f_sel[m]) if np.any(m) else 0.0
                 rel_power[name].append(bp / total if total > 0 else 0.0)
 
@@ -225,7 +263,7 @@ class FrequencySimilarity:
             _, _, synth_power, _ = self.compute_relative_power(synthetic_data, analysis_band, win_seconds, window,
                                                                 detrend, overlap)
             print("Relative Bands Power (Sample):")
-            for band in self.BAND_NAMES:
+            for band in self.band_names:
                 r = np.mean(real_power[band]) * 100
                 s = np.mean(synth_power[band]) * 100
                 print(f"  {band}: Real: {r:.2f}%, Synthetic: {s:.2f}%, Diff: {abs(r - s):.2f}%")
@@ -239,7 +277,7 @@ class FrequencySimilarity:
                                                             detrend, overlap)
 
         print("Relative Bands Power (Dataset):")
-        for band in self.BAND_NAMES:
+        for band in self.band_names:
             r = np.mean(real_power[band]) * 100
             s = np.mean(synth_power[band]) * 100
             print(f"  {band}: Real: {r:.2f}%, Synthetic: {s:.2f}%, Diff: {abs(r - s):.2f}%")
@@ -317,8 +355,8 @@ class FrequencySimilarity:
         # Build band dict from class edges/names (clipped to global band)
         bands_used = {}
         if per_band:
-            for i, name in enumerate(self.BAND_NAMES):
-                lo, hi = self.BAND_EDGES[i], self.BAND_EDGES[i + 1]
+            for i, name in enumerate(self.band_names):
+                lo, hi = self.band_edges[i], self.band_edges[i + 1]
                 lo_c = max(lo, fmin)
                 hi_c = min(hi, fmax)
                 if hi_c > lo_c:
@@ -509,7 +547,7 @@ class FrequencySimilarity:
         }
         return result
 
-    def spectral_wasserstein_distance(self, real_data, synthetic_data, fmin=0.5, fmax=100, mode="pairmean", per_band=True):
+    def spectral_wasserstein_distance(self, real_data, synthetic_data, fmin=0.5, fmax=500, mode="pairmean", per_band=True):
         """
         Spectral Wasserstein distance (Earth Mover's Distance) computed ALONG the
         frequency axis between normalized PSDs. Phase-agnostic. Units: Hz.
@@ -538,7 +576,10 @@ class FrequencySimilarity:
         if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
             synthetic_data = [synthetic_data]
 
-        # ---- helpers --------------------------------------------------------
+        nyq = self.fs / 2.0
+        fmax = min(fmax, nyq)
+
+        # Helpers
         def _psd_norm(sig, lo, hi):
             """Normalized PSD density over [lo, hi]; integrates to 1."""
             nperseg = min(len(sig), 4 * self.fs)
@@ -579,7 +620,7 @@ class FrequencySimilarity:
             mean_d = mean_d / mean_d.sum()
             return base, mean_d
 
-        # ---- overall over [fmin, fmax] -------------------------------------
+        # Overall over [fmin, fmax]
         if mode == "pairmean":
             vals = [_wd_pair(r, s, fmin, fmax) for r, s in zip(real_data, synthetic_data)]
             spectral_wasserstein_distance = float(np.mean(vals)) if len(vals) else float('nan')
@@ -595,17 +636,17 @@ class FrequencySimilarity:
         else:
             raise ValueError("mode must be 'pairmean' or 'meanpsd'")
 
-        # ---- per-band (optional) -------------------------------------------
         if per_band:
-            bands = {
-                "Delta": (0.5, 4),
-                "Theta": (4, 8),
-                "Alpha": (8, 13),
-                "Beta": (13, 30),
-                "Gamma": (30, 100),
-            }
+            # build per-band dict from class edges/names, clipped to Nyquist
+            band_dict = {}
+            for i, name in enumerate(self.band_names):
+                lo, hi = self.band_edges[i], self.band_edges[i + 1]
+                lo_c, hi_c = max(lo, fmin), min(hi, nyq)
+                if hi_c > lo_c:
+                    band_dict[name] = (lo_c, hi_c)
+
             spectral_wasserstein_distance_bands = {}
-            for name, (lo, hi) in bands.items():
+            for name, (lo, hi) in band_dict.items():
                 if mode == "pairmean":
                     vals = [_wd_pair(r, s, lo, hi) for r, s in zip(real_data, synthetic_data)]
                     spectral_wasserstein_distance_bands[name] = float(np.mean(vals)) if len(vals) else float('nan')
@@ -614,21 +655,23 @@ class FrequencySimilarity:
                     fs_, ps = _wd_meanpsd(synthetic_data, lo, hi)
                     f_common = fr if fr.size >= fs_.size else fs_
                     pr_i = np.interp(f_common, fr, pr);
-                    pr_i = pr_i / pr_i.sum()
+                    pr_i /= pr_i.sum()
                     ps_i = np.interp(f_common, fs_, ps);
-                    ps_i = ps_i / ps_i.sum()
-                    spectral_wasserstein_distance_bands[name] = float(wasserstein_distance(f_common, f_common, pr_i, ps_i))
+                    ps_i /= ps_i.sum()
+                    spectral_wasserstein_distance_bands[name] = float(
+                        wasserstein_distance(f_common, f_common, pr_i, ps_i)
+                    )
 
             print(f"Spectral Wasserstein distance (Hz) [{fmin}-{fmax}]: {spectral_wasserstein_distance:.4f}")
             for k, v in spectral_wasserstein_distance_bands.items():
                 print(f"  {k}: {v:.4f} Hz")
             return spectral_wasserstein_distance_bands, spectral_wasserstein_distance
 
-        # print & return overall only
+        # Print & return overall only
         print(f"Spectral Wasserstein distance (Hz) [{fmin}-{fmax}]: {spectral_wasserstein_distance:.4f}")
         return spectral_wasserstein_distance
 
-    def plot_psd(self, real_data, synthetic_data, scale="linear",smooth=False, window_length=11, polyorder=2):
+    def plot_psd(self, real_data, synthetic_data, scale="linear",smooth=False, window_length=11, polyorder=2,xlim=None, ylim=None, analysis_band=None):
         """
         Plots the power spectral density (PSD) for real and synthetic data on a specified scale.
 
@@ -647,6 +690,9 @@ class FrequencySimilarity:
         polyorder : int, optional
             Polynomial order for smoothing. Defaults to 2.
         """
+        # Local PSD default band
+        # PSD-specific default band: (0, 100) unless user passes one
+        analysis_band_plot = (0.0, 100.0) if analysis_band is None else tuple(analysis_band)
 
         if scale not in ("linear", "log"):
             raise ValueError("scale must be 'linear' or 'log'.")
@@ -660,21 +706,21 @@ class FrequencySimilarity:
         analysis_type = "sample" if len(real_data) == 1 and len(synthetic_data) == 1 else "dataset"
 
         # Use instance defaults (or allow optional overrides if you add params)
-        fmin, fmax, win_s, wnd, dtr, ovl = self._resolve_params()
+        fmin, fmax, win_s, wnd, dtr, ovl = self._resolve_params(analysis_band=analysis_band_plot)
 
         # Helper: compute PSD and interpolate to a reference grid
         def _psd_stack(data):
             freqs_list, psd_list = [], []
             for sig in data:
-                f, pxx, _, _ = self._compute_psd(sig, (fmin, fmax), win_s, wnd, dtr, ovl)
-                freqs_list.append(f);
-                psd_list.append(pxx)
-            # choose densest grid as reference
+                _, _, f_sel, p_sel = self._compute_psd(sig, (fmin, fmax), win_s, wnd, dtr, ovl)
+                freqs_list.append(f_sel)
+                psd_list.append(p_sel)
+            # Choose densest grid as reference
             f_ref = max(freqs_list, key=len)
             psd_interp = [np.interp(f_ref, fi, pi) if fi is not f_ref else pi
                           for fi, pi in zip(freqs_list, psd_list)]
             psd_stack = np.vstack(psd_interp)  # shape: (N, F)
-            return f_ref, psd_stack
+            return f_ref, np.vstack(psd_interp)
 
         fr, psd_r_stack = _psd_stack(real_data)
         fs, psd_s_stack = _psd_stack(synthetic_data)
@@ -706,8 +752,13 @@ class FrequencySimilarity:
 
         # Common y-limits for linear scale
         if scale == "linear":
-            y_min = 0.0
-            y_max = 1.1 * max(real_psd.max(), synthetic_psd.max())
+            if ylim is not None:
+                y_min, y_max = ylim
+            else:
+                y_min = 0.0
+                y_max = 1.1 * max(real_psd.max(), synthetic_psd.max())
+        else:
+            y_min, y_max = None, None
 
         plt.figure(figsize=(12, 6))
 
@@ -715,13 +766,19 @@ class FrequencySimilarity:
         plt.subplot(1, 2, 1)
         if scale == "linear":
             plt.plot(f_plot, real_psd, color="blue", label="real data")
-            plt.ylim(y_min, y_max)
+            if y_min is not None and y_max is not None:
+                plt.ylim(y_min, y_max)
             plt.ylabel("PSD ($\\mu V^2$/Hz)", fontsize=15)
         else:
             plt.semilogy(f_plot, real_psd_clamped, color="lightgreen", label="real data")
+            if ylim is not None:
+                plt.ylim(ylim)
             plt.ylabel("PSD ($\\mu V^2$/Hz, log axis)", fontsize=15)
         plt.xlabel("Frequency (Hz)", fontsize=15)
-        plt.xlim(fmin, fmax)
+        if xlim is not None:
+            plt.xlim(xlim)
+        else:
+            plt.xlim(fmin, fmax)
         plt.title(f"Real data PSD ({analysis_type}) - {scale} scale", fontsize=16)
         plt.grid(True, which="both")
         plt.legend()
@@ -730,13 +787,19 @@ class FrequencySimilarity:
         plt.subplot(1, 2, 2)
         if scale == "linear":
             plt.plot(f_plot, synthetic_psd, color="grey", label="synthetic data")
-            plt.ylim(y_min, y_max)
+            if y_min is not None and y_max is not None:
+                plt.ylim(y_min, y_max)
             plt.ylabel("PSD ($\\mu V^2$/Hz)", fontsize=15)
         else:
             plt.semilogy(f_plot, synthetic_psd_clamped, color="grey", label="synthetic data")
+            if ylim is not None:
+                plt.ylim(ylim)
             plt.ylabel("PSD ($\\mu V^2$/Hz, log axis)", fontsize=15)
         plt.xlabel("Frequency (Hz)", fontsize=15)
-        plt.xlim(fmin, fmax)
+        if xlim is not None:
+            plt.xlim(xlim)
+        else:
+            plt.xlim(fmin, fmax)
         plt.title(f"Synthetic data PSD ({analysis_type}) - {scale} scale", fontsize=16)
         plt.grid(True, which="both")
         plt.legend()
