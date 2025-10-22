@@ -33,7 +33,7 @@ class ScalogramSimilarity:
     scalogram_analysis.plot_mean_scalograms(real_data, synthetic_data, save=None)
 
     # Compute burst statistics within a frequency band
-    burst_results = scalogram_analysis.compute_burst_statistics(real_data, synthetic_data,band=(13, 30),
+    burst_results = scalogram_analysis.compute_burst_statistics(real_data, synthetic_data, band=(13, 30),
     threshold="percentile", p=70.0, min_duration_ms=50.0, merge_gap_ms=50.0, smooth_ms=20.0)
 
     References:
@@ -56,7 +56,7 @@ class ScalogramSimilarity:
         freq_max : float
             Maximum frequency in Hz for scalogram.
         num_freqs : int
-            Number of frequency bins for wavelet transform.
+            Number of frequency bins for wavelet transform. Increase it for finer resolution at higher frequencies.
         """
         if fs <= 0:
             raise ValueError("Sampling frequency `fs` must be positive.")
@@ -83,7 +83,7 @@ class ScalogramSimilarity:
             raise ValueError("Sampling frequency `fs` must be positive.")
         self.fs = fs
 
-    # Helpers
+    # ------------------------ NEW HELPERS (freq grid + intensity) ------------------------
 
     def _build_frequency_grid(self, freq_scale: str, num_freqs: int | None = None) -> np.ndarray:
         """
@@ -138,6 +138,8 @@ class ScalogramSimilarity:
         else:
             raise ValueError("Invalid db_ref.")
         return 10.0 * np.log10((power_from_mean_amp + eps) / ref)
+
+    # ------------------------------------------------------------------------------------
 
     def _convert_to_rgb(self, image, *, colormap='terrain', vmin=None, vmax=None):
         """
@@ -773,7 +775,7 @@ class ScalogramSimilarity:
         Compute burst statistics for real and synthetic datasets using the scalogram.
         Returns per-signal summaries and RS/RR/SS distances for each feature.
 
-        verbose: if True, prints a compact summary of results.  
+        verbose: if True, prints a compact summary of results.  # >>> NEW <<<
         """
         from scipy.stats import wasserstein_distance as WD
         import numpy as np
@@ -868,6 +870,5 @@ class ScalogramSimilarity:
             "RR_dispersion": wd_rr,
             "SS_dispersion": wd_ss
         }
-
 
 
