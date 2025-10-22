@@ -29,7 +29,7 @@ def main_validation():
     gamma = 40
 
     # HFOs
-    ripple_freq      = 200   # 150–250 Hz
+    ripple_freq      = 200   # 80–250 Hz
     fast_ripple_freq = 320   # 250–500 Hz
 
     # Signals
