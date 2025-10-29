@@ -422,21 +422,21 @@ def compute_fractality_score(real_data,
     """
 
     if weights is None:
-        # weights across subscores (must sum to 1 after NaN filtering)
+        # Weights across subscores (must sum to 1 after NaN filtering)
         weights = {'dcca': 0.35, 'mfdfa': 0.35, 'mfdcca': 0.30}
 
-        # wrap 1D arrays
+        # Wrap 1D arrays
     if isinstance(real_data, np.ndarray) and real_data.ndim == 1: real_data = [real_data]
     if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1: synthetic_data = [synthetic_data]
 
     # Auxiliary functions
     def _sim_range(a, b, lo, hi):
-        # range-aware similarity in [0,1]
+        # Range-aware similarity in [0,1]
         d = min(abs(float(a) - float(b)), hi - lo)
         return 1.0 - d / (hi - lo)
 
     def _mean_Hq(signals, q_range, get_scales):
-        # average single-series H(q) curves over a set of signals
+        # Average single-series H(q) curves over a set of signals
         Hqs = []
         for x in signals:
             scales = get_scales(len(x))
@@ -450,7 +450,7 @@ def compute_fractality_score(real_data,
             return None
         return np.nanmean(np.vstack(Hqs), axis=0)  # mean curve over signals
 
-    # ------------------------------ DCCA (use Hxy only)
+    # DCCA (use Hxy only)
     fs_dcca = FractalSimilarity(real_data, synthetic_data, method='DCCA', q_range=q_range)
     fs_dcca.compute_fractal_metrics()
     H_rr, H_rs = fs_dcca.means[:2]
@@ -459,7 +459,7 @@ def compute_fractality_score(real_data,
     S_H_dcca = _sim_range(H_rr, H_rs, lo=0.3, hi=1.2)
     F_DCCA = S_H_dcca  # drop rho
 
-    # ------------------------------ MFDFA (H + H(q) curve)
+    # MFDFA (H + H(q) curve)
     fs_mfdfa = FractalSimilarity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
     fs_mfdfa.compute_fractal_metrics()
     H_r, H_s = fs_mfdfa.means
@@ -467,7 +467,7 @@ def compute_fractality_score(real_data,
     S_H_mfdfa = _sim_range(H_r, H_s, lo=0.3, hi=1.2)
 
     # H(q) curve similarity (single-series): average curves over each group
-    # reuse the same scales as your class to keep consistency
+    # Reuse the same scales as your class to keep consistency
     dummy = FractalSimilarity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
     Hq_r = _mean_Hq(real_data, q_range, dummy._get_win_sizes)
     Hq_s = _mean_Hq(synthetic_data, q_range, dummy._get_win_sizes)
@@ -478,13 +478,13 @@ def compute_fractality_score(real_data,
     else:
         S_Hq = np.nan
 
-    # blend H level and H(q) shape
+    #  Blend H level and H(q) shape
     if np.isnan(S_Hq):
         F_MFDFA = S_H_mfdfa
     else:
         F_MFDFA = 0.5 * S_H_mfdfa + 0.5 * S_Hq
 
-    # ------------------------------ MFDCCA (Hxy + Δα) ONLY
+    # MFDCCA (Hxy + Δα)
     fs_mfdcca = FractalSimilarity(real_data, synthetic_data, method='MFDCCA', q_range=q_range)
     fs_mfdcca.compute_fractal_metrics()
     Hc_rr, Hc_rs = fs_mfdcca.means[:2]
@@ -496,7 +496,7 @@ def compute_fractality_score(real_data,
     # Drop Fxy and p(q); they inflate similarity for independent processes
     F_MFDCCA = 0.7 * S_H_mfdcca + 0.3 * S_Dalpha
 
-    # ------------------------------ aggregate
+    # Aggregate subscores
     subscores = {'dcca': F_DCCA, 'mfdfa': F_MFDFA, 'mfdcca': F_MFDCCA}
     valid = [v for v in subscores.values() if np.isfinite(v)]
     if not valid:
@@ -558,14 +558,17 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     """
     Computes a composite diversity score between real and synthetic EEG datasets.
 
-    Six normalised sub-metrics are averaged (or linearly combined via ``weights``):
+    Nine normalised sub-metrics are averaged (or linearly combined via ``weights``):
 
-        1.  C_cov     – Gaussian-weighted coverage                    ↑ good
-        2.  1−O_out   – Gaussian-weighted outlier rate (inverted)     ↑ good
-        3.  S_PCA     – silhouette coefficient in PCA space           ↑ good
-        4.  S_UM      – silhouette coefficient in UMAP space          ↑ good
-        5.  1−D_PCA   – centroid distance in PCA space  (inverted)    ↑ good
-        6.  1−D_UM    – centroid distance in UMAP space (inverted)    ↑ good
+        1.  C_cov        – Gaussian-weighted coverage                    ↑ good
+        2.  O_out        – Gaussian-weighted outlier goodness            ↑ good
+        3.  S_PCA        – silhouette coefficient in PCA space           ↑ good
+        4.  S_UM         – silhouette coefficient in UMAP space          ↑ good
+        5.  D_PCA        – centroid overlap score in PCA space           ↑ good
+        6.  D_UM         – centroid overlap score in UMAP space          ↑ good
+        7.  U_NN         – Uniqueness (NN ratio, syn/real, normalized)   ↑ good
+        8.  L_loc        – Local diversity (P50 NN ratio, normalized)    ↑ good
+        9.  G_glob       – Global diversity (pairwise ratio, normalized) ↑ good
 
     Parameters
     ----------
@@ -574,9 +577,10 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     synthetic_data : np.ndarray
         Shape (n_samples, n_features).
     weights : dict, optional
-        Dictionary with keys ``['coverage','outliers',
-        'pca_silhouette','umap_silhouette','pca_distance','umap_distance']``.
-        Defaults to equal weights (1/6 each).
+        Dictionary with keys:
+        ['coverage','outliers','pca_compactness','umap_compactness',
+         'pca_overlap','umap_overlap','uniqueness','local_div','global_div'].
+        Defaults to equal weights (1/9 each).
     n_components : int, optional
         Dimensionality of PCA / UMAP (default = 2).
 
@@ -592,41 +596,75 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     float
         Diversity score ∈ [0, 1] (higher ⇒ greater similarity/diversity quality).
     """
-    # Compute raw metrics
+
+    # Helper for symmetric normalization of ratio metrics
+    def normalize_ratio(ratio):
+        """Map ratio>0 to [0,1], with 1 as ideal (ratio=1)."""
+        if not np.isfinite(ratio) or ratio <= 0:
+            return np.nan
+        return float(np.exp(-abs(np.log(ratio))))
+
+    # Compute raw metrics from the Diversity class
     div = Diversity(n_components=n_components)
-    m   = div.compute_metrics(real_data, synthetic_data)
+    m_cov = div.compute_coverage_diversity(real_data, synthetic_data)
+    m_geom = div.compute_geometric_diversity(real_data, synthetic_data)
+    m_intr = div.compute_intrinsic_diversity(real_data, synthetic_data)
 
-    # Transform each metric to [0, 1] similarity scale
-    # Put all on a "higher = better" [0,1] scale
-    C_cov = m['Coverage']  # [0,1], higher better
-    O_out = m['Outliers']  # invert → [0,1], higher better
-    S_PCA = m['PCA_Compactness']  # already [0,1], higher better
-    S_UM = m['UMAP_Compactness']  # already [0,1], higher better
-    D_PCA = m['PCA_Separation']  # invert → [0,1], higher better
-    D_UM = m['UMAP_Separation']  # invert → [0,1], higher better
+    # Transform each metric to a [0,1] similarity scale (higher=better)
+    C_cov = m_cov['Coverage']           # already [0,1]
+    O_out = m_cov['Outliers']           # already [0,1]
+    S_PCA = m_geom['PCA_Compactness']    # already [0,1]
+    S_UM  = m_geom['UMAP_Compactness']   # already [0,1]
+    D_PCA = m_geom['PCA_Separation']     # already [0,1] (overlap score)
+    D_UM  = m_geom['UMAP_Separation']    # already [0,1]
 
-    # Weights for each metric
+    # Normalize intrinsic diversity ratios (symmetrically centered at 1)
+    U_NN   = normalize_ratio(m_intr['Uniqueness_NN'])
+    L_loc  = normalize_ratio(m_intr['Local_Diversity_P50'])
+    G_glob = normalize_ratio(m_intr['Global_Diversity'])
+
+    # Default weights (equal importance)
     if weights is None:
         weights = {
-            'coverage'        : 1/6,
-            'outliers'        : 1/6,
-            'pca_compactness'  : 1/6,
-            'umap_compactness' : 1/6,
-            'pca_separation'    : 1/6,
-            'umap_separation'   : 1/6,
+            'coverage'         : 1/9,
+            'outliers'         : 1/9,
+            'pca_compactness'  : 1/9,
+            'umap_compactness' : 1/9,
+            'pca_overlap'      : 1/9,
+            'umap_overlap'     : 1/9,
+            'uniqueness'       : 1/9,
+            'local_div'        : 1/9,
+            'global_div'       : 1/9,
         }
 
+    # Weighted composite score
     diversity_score = (
         weights['coverage']        * C_cov +
         weights['outliers']        * O_out +
-        weights['pca_compactness']  * S_PCA +
-        weights['umap_compactness'] * S_UM  +
-        weights['pca_separation']    * D_PCA +
-        weights['umap_separation']   * D_UM
+        weights['pca_compactness'] * S_PCA +
+        weights['umap_compactness']* S_UM  +
+        weights['pca_overlap']     * D_PCA +
+        weights['umap_overlap']    * D_UM  +
+        weights['uniqueness']      * U_NN  +
+        weights['local_div']       * L_loc +
+        weights['global_div']      * G_glob
     )
 
-    print(f"Diversity Score: {diversity_score:.2f}")
+    # Metrics printout
+    print(f"Diversity Score : {diversity_score:.3f}")
+    print(f"Coverage             : {C_cov:.3f}")
+    print(f"Outlier Goodness     : {O_out:.3f}")
+    print(f"PCA Compactness      : {S_PCA:.3f}")
+    print(f"UMAP Compactness     : {S_UM:.3f}")
+    print(f"PCA Overlap (Separation↑): {D_PCA:.3f}")
+    print(f"UMAP Overlap (Separation↑): {D_UM:.3f}")
+    print(f"Uniqueness (NN ratio norm.) : {U_NN:.3f}")
+    print(f"Local Diversity (norm.)     : {L_loc:.3f}")
+    print(f"Global Diversity (norm.)    : {G_glob:.3f}")
+
+
     return diversity_score
+
 
 
 def compute_privacy_score(real_data, synthetic_data, weights: dict | None = None):
@@ -694,7 +732,7 @@ def compute_privacy_score(real_data, synthetic_data, weights: dict | None = None
             break
 
     if attack_acc is None or np.isnan(attack_acc):
-        # Prefer to FAIL LOUDLY rather than pretend privacy is perfect
+        # Prefer to fail loudly rather than pretend privacy is perfect
         available = ", ".join(mir_metrics.keys())
         raise ValueError(
             f"MIR attack accuracy not found. Looked for {candidate_keys}. "
@@ -725,7 +763,3 @@ def compute_privacy_score(real_data, synthetic_data, weights: dict | None = None
 
     return privacy_score
 
-real_data = np.random.randn(100, 128)
-synthetic_data = real_data + np.random.normal(0, 0.5, real_data.shape)
-
-compute_time_similarity_score(real_data, synthetic_data)
