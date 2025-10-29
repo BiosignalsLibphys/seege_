@@ -31,11 +31,11 @@ class AmplitudeSimilarity:
 
     asim = AmplitudeSimilarity(fs=2048)
 
-    metrics_dataset = asim.compute_metrics(real_data, synthetic_data)
-    asim.plot_metrics(metrics_dataset)
+    metrics_dataset = asim.compute_fsv(real_data, synthetic_data)
+    asim.plot_fsv(metrics_dataset)
 
-    metrics_sample = asim.compute_metrics(real_data[0], synthetic_data[0])
-    asim.plot_metrics(metrics_sample)
+    metrics_sample = asim.compute_fsv(real_data[0], synthetic_data[0])
+    asim.plot_fsv(metrics_sample)
 
     References:
     ----------
@@ -46,7 +46,7 @@ class AmplitudeSimilarity:
         """Initialize the AmplitudeSimilarity class with sampling frequency."""
         self.fs = fs
 
-    def compute_metrics(self, real_data, synthetic_data, *,
+    def compute_fsv(self, real_data, synthetic_data, *,
                         mode: str = "all_vs_all",  # "zip" or "all_vs_all"
                         nperseg: int = 256, return_per_pair: bool = False,
                         return_details: bool = False):
@@ -174,7 +174,7 @@ class AmplitudeSimilarity:
 
         return amplitude_metrics
 
-    def plot_metrics(self, metrics):
+    def plot_fsv(self, metrics):
         """
         Plot the computed Feature Selective Validation metrics in a bar chart.
 
