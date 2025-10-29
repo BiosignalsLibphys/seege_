@@ -79,7 +79,7 @@ def run_validation_tests(fs=1000, duration=1):
         signal1 = generate_signals(sig1_type, fs, duration)
         signal2 = generate_signals(sig2_type, fs, duration, noise_level=noise_level)
 
-        metrics = asim.compute_metrics(signal1, signal2)
+        metrics = asim.compute_fsv(signal1, signal2)
         gdm_interp = interpret_fsv(metrics["GDM"])
 
         print(f"\nTest Case: {test_name}")
