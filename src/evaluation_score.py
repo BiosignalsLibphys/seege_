@@ -45,7 +45,7 @@ def compute_amplitude_similarity_score(real_data, synthetic_data, fs, *,
         Mean FSV similarity score.
     """
     fsv = AmplitudeSimilarity(fs)
-    metrics = fsv.compute_amplitude_metrics(real_data, synthetic_data,mode=mode, nperseg=nperseg)
+    metrics = fsv.compute_fsv(real_data, synthetic_data,mode=mode, nperseg=nperseg)
 
     print("Amplitude Similarity Score: {:.2f}".format(metrics["Similarity"]))
 
