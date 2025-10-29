@@ -22,10 +22,11 @@ if __name__ == '__main__':
     print(np.shape(synthetic_data))
 
     ##### FIDELITY ANALYSIS #####
-
-    # Compute amplitude similarity
+    
+    # Amplitude
     # Initialize class
     #asim = AmplitudeSimilarity(fs=512)
+    
     # Compute amplitude similarity metrics
     #metrics_dataset = asim.compute_metrics(real_data, synthetic_data)
     #metrics_sample = asim.compute_metrics(real_data[0], synthetic_data[0])
@@ -38,11 +39,12 @@ if __name__ == '__main__':
     #dataset_score = evaluation_score.compute_amplitude_similarity_score(real_data, synthetic_data, fs=512)
     #sample_score = evaluation_score.compute_amplitude_similarity_score(real_data[0], synthetic_data[0], fs=512)
 
-    # Compute time similarity
+    # Time
     # Initialize class
     #sim = TimeSimilarity()
+    
     # Compute amplitude similarity metrics
-    #results_dataset = sim.compute_time_metrics(real_data, synthetic_data, verbose=True)
+    #hjorth_dataset = sim.compute_hjorth_metrics(real_data, synthetic_data, verbose=True)
 
     # Plot Hjorth parameter distributions
     #hjorth_hist_dataset = sim.plot_hjorth_histograms(real_data, synthetic_data)
@@ -50,16 +52,21 @@ if __name__ == '__main__':
     # Plot 3D Hjorth parameter scatter
     #hjorth_3d_dataset = sim.plot_hjorth_3d(real_data, synthetic_data)
 
+    # Compute entropy/complexity metrics
+    #entropy_dataset = sim.compute_entropy_complexity_metrics(real_data, synthetic_data)
+
     # Compute time similarity score
     #evaluation_score.compute_time_similarity_score(real_data, synthetic_data)
 
-    # Compute frequency similarity
+    # Frequency 
     # Initialize class
     #frequency_analysis = FrequencySimilarity(fs=512)
+    
     # Compute frequency similarity metrics
     # At dataset level
     #frequency_analysis.compare_relative_power(real_data, synthetic_data)
     #frequency_analysis.spectral_coherence(real_data, synthetic_data)
+    
     # At sample level
     #frequency_analysis.compare_relative_power(real_data[0], synthetic_data[0])
     #frequency_analysis.spectral_coherence(real_data[0], synthetic_data[0])
@@ -76,7 +83,7 @@ if __name__ == '__main__':
     # At sample level
     #evaluation_score.compute_frequency_similarity_score(real_data[0], synthetic_data[0], fs=512)
 
-    # Compute scalogram similarity
+    # Time-frequency
     # Initialize class
     #scalogram_analysis = ScalogramSimilarity(fs=512)
 
@@ -86,19 +93,20 @@ if __name__ == '__main__':
     # At dataset level
     #scalogram_analysis.plot_mean_scalograms(real_data,synthetic_data, freq_scale="log")
 
-
     # Compute scalogram similarity metrics
     # At dataset level
     #scalogram_analysis.compute_scalogram_similarity_metrics(real_data,synthetic_data)
     # At sample level
     #scalogram_analysis.compute_scalogram_similarity_metrics(real_data[0], synthetic_data[0])
 
+    # Compute burst statistics within the beta band
+    burst_results = scalogram_analysis.compute_burst_statistics(real_data, synthetic_data, band=(13, 30))
+
     # Compute scalogram similarity score
     #evaluation_score.compute_scalogram_similarity_score(real_data[1], synthetic_data[3], fs=512)
     #evaluation_score.compute_scalogram_similarity_score(real_data, synthetic_data, fs=512, mode="all_vs_all")
 
-    # Compute fractality similarity
-
+    # Fractality
     # Initialize class for MFDFA method
     #fs = FractalSimilarity(real_data, synthetic_data, method='MFDFA')
     # Compute MFDFA metrics
@@ -128,12 +136,18 @@ if __name__ == '__main__':
     # Initialize class
     #div = Diversity()
 
-    # Compute diversity metrics
-    #div_results = div.compute_metrics(real_data, synthetic_data)
+    # Compute coverage diversity metrics
+    cov = div.compute_coverage_diversity(real_data, synthetic_data)
+
+    # Compute geometric diversity metrics
+    geom = div.compute_geometric_diversity(real_data, synthetic_data)
+
+    # Compute intrinsic diversity metrics
+    intr = div.compute_intrinsic_diversity(real_data, synthetic_data)
 
     # Plot PCA and UMAP results
-    #div.plot_embeddings("PCA", div_results)
-    #div.plot_embeddings("UMAP", div_results)
+    div.plot_embeddings("PCA", geom)
+    div.plot_embeddings("UMAP", geom)
 
     # Compute diversity score
     #evaluation_score.compute_diversity_score(real_data, synthetic_data)
