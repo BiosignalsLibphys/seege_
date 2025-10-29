@@ -28,12 +28,12 @@ if __name__ == '__main__':
     #asim = AmplitudeSimilarity(fs=512)
     
     # Compute amplitude similarity metrics
-    #metrics_dataset = asim.compute_metrics(real_data, synthetic_data)
-    #metrics_sample = asim.compute_metrics(real_data[0], synthetic_data[0])
+    #metrics_dataset = asim.compute_fsv(real_data, synthetic_data)
+    #metrics_sample = asim.compute_fsv(real_data[0], synthetic_data[0])
 
     # Plot amplitude similarity metrics
-    #dataset_plot = asim.plot_metrics(metrics_dataset)
-    #sample_plot = asim.plot_metrics(metrics_sample)
+    #dataset_plot = asim.plot_fsv(metrics_dataset)
+    #sample_plot = asim.plot_fsv(metrics_sample)
 
     # Compute amplitude similarity score
     #dataset_score = evaluation_score.compute_amplitude_similarity_score(real_data, synthetic_data, fs=512)
