@@ -20,8 +20,8 @@ class Diversity:
 
     2) Geometric (Structural) Diversity in low-dimensional embeddings
        • Compactness (class-wise silhouette, PCA & UMAP) ∈ [0, 1]
-       • Separation/Overlap (spread-normalized centroid alignment, PCA & UMAP) ∈ [0, 1]
-         (interpreted as “overlap”: 1≈well-aligned, 0≈disjoint)
+       • Mahalanobis-based Overlap (pooled-covariance; PCA & UMAP) ∈ (0, 1]
+         (higher = closer centroids after normalizing by joint scatter)
 
     3) Intrinsic (Sample-level) Diversity within the synthetic set
        • Uniqueness (mean nearest-neighbour distance ratio, syn/real)
@@ -129,18 +129,17 @@ class Diversity:
         PCA_Compactness, UMAP_Compactness : float in [0, 1]
             Rescaled class-wise silhouette (per class in {real, synthetic}, averaged and mapped from [−1, 1] → [0, 1]).
             Higher ≈ tighter class cohesion while respecting separation from the other class.
-        PCA_Separation, UMAP_Separation : float in [0, 1]
-            Spread-normalized centroid alignment interpreted as “overlap”:
-              overlap = 1 − delta / (delta + r_real + r_synth + ε).
-            Higher ≈ better alignment / overlap of real vs. synthetic centroids w.r.t. class spreads.
+        PCA_OverlapMahalanobis, UMAP_OverlapMahalanobis : float in (0, 1]
+            Mahalanobis-based overlap using pooled covariance (higher = closer,
+            indicating synthetic samples follow the real manifold geometry).
 
         Returns
         -------
         dict with keys:
             'PCA_Embedding', 'UMAP_Embedding',
             'PCA_Compactness', 'UMAP_Compactness',
-            'PCA_Separation', 'UMAP_Separation'
-        (Embeddings are 2D arrays for direct plotting.)
+            'PCA_OverlapMahalanobis', 'UMAP_OverlapMahalanobis'
+
         """
         real = np.asarray(real_data)
         synth = np.asarray(synthetic_data)
@@ -156,15 +155,22 @@ class Diversity:
 
         mu_r = pca_emb[:n_real].mean(axis=0)
         mu_s = pca_emb[n_real:].mean(axis=0)
-        delta = float(np.linalg.norm(mu_r - mu_s))
-        r_r = float(np.mean(np.linalg.norm(pca_emb[:n_real] - mu_r, axis=1)))
-        r_s = float(np.mean(np.linalg.norm(pca_emb[n_real:] - mu_s, axis=1)))
-        pca_overlap = 1.0 - (delta / (delta + r_r + r_s + eps))  # ∈ [0,1]; “Separation” interpreted as overlap
 
-        s_pca = silhouette_samples(pca_emb, labels)  # per-sample ∈ [−1,1]
+        Xr = pca_emb[:n_real]
+        Xs = pca_emb[n_real:]
+
+        Sr = np.cov(Xr.T)
+        Ss = np.cov(Xs.T)
+        Sp = Sr + Ss + 1e-6 * np.eye(Sr.shape[0])
+
+        delta_vec = (mu_r - mu_s).reshape(-1, 1)
+        d2_pca = float((delta_vec.T @ np.linalg.inv(Sp) @ delta_vec).squeeze())
+        pca_overlap_maha = float(np.exp(-0.5 * d2_pca))
+
+        s_pca = silhouette_samples(pca_emb, labels)
         pca_compact = float(((s_pca[:n_real].mean() + s_pca[n_real:].mean()) / 2.0 + 1.0) / 2.0)
 
-        # ----- UMAP -----
+        # UMAP
         umap_emb = UMAP(
             n_components=self.n_components,
             n_neighbors=self.n_neighbors,
@@ -174,26 +180,33 @@ class Diversity:
 
         mu_r_u = umap_emb[:n_real].mean(axis=0)
         mu_s_u = umap_emb[n_real:].mean(axis=0)
-        delta_u = float(np.linalg.norm(mu_r_u - mu_s_u))
-        r_r_u = float(np.mean(np.linalg.norm(umap_emb[:n_real] - mu_r_u, axis=1)))
-        r_s_u = float(np.mean(np.linalg.norm(umap_emb[n_real:] - mu_s_u, axis=1)))
-        umap_overlap = 1.0 - (delta_u / (delta_u + r_r_u + r_s_u + eps))
+
+        Xr_u = umap_emb[:n_real]
+        Xs_u = umap_emb[n_real:]
+
+        Sr_u = np.cov(Xr_u.T)
+        Ss_u = np.cov(Xs_u.T)
+        Sp_u = Sr_u + Ss_u + 1e-6 * np.eye(Sr_u.shape[0])
+
+        delta_vec_u = (mu_r_u - mu_s_u).reshape(-1, 1)
+        d2_umap = float((delta_vec_u.T @ np.linalg.inv(Sp_u) @ delta_vec_u).squeeze())
+        umap_overlap_maha = float(np.exp(-0.5 * d2_umap))
 
         s_umap = silhouette_samples(umap_emb, labels)
         umap_compact = float(((s_umap[:n_real].mean() + s_umap[n_real:].mean()) / 2.0 + 1.0) / 2.0)
 
-        print("[Geometric Diversity] PCA  -> Compactness: "
-              f"{pca_compact:.3f}  | Overlap (Separation↑): {pca_overlap:.3f}")
-        print("[Geometric Diversity] UMAP -> Compactness: "
-              f"{umap_compact:.3f}  | Overlap (Separation↑): {umap_overlap:.3f}")
+        print("[Geometric Diversity] PCA  -> Compactness:", f"{pca_compact:.3f}",
+              "| Mahalanobis Overlap:", f"{pca_overlap_maha:.3f}")
+        print("[Geometric Diversity] UMAP -> Compactness:", f"{umap_compact:.3f}",
+              "| Mahalanobis Overlap:", f"{umap_overlap_maha:.3f}")
 
         return {
             "PCA_Embedding": pca_emb,
             "UMAP_Embedding": umap_emb,
             "PCA_Compactness": pca_compact,
             "UMAP_Compactness": umap_compact,
-            "PCA_Separation": pca_overlap,
-            "UMAP_Separation": umap_overlap,
+            "PCA_OverlapMahalanobis": pca_overlap_maha,
+            "UMAP_OverlapMahalanobis": umap_overlap_maha,
         }
 
 
