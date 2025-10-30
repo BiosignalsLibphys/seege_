@@ -1,3 +1,4 @@
+
 from amplitude_similarity import *
 from time_similarity import *
 from frequency_similarity import *
@@ -45,7 +46,7 @@ def compute_amplitude_similarity_score(real_data, synthetic_data, fs, *,
         Mean FSV similarity score.
     """
     fsv = AmplitudeSimilarity(fs)
-    metrics = fsv.compute_fsv(real_data, synthetic_data,mode=mode, nperseg=nperseg)
+    metrics = fsv.compute_metrics(real_data, synthetic_data,mode=mode, nperseg=nperseg)
 
     print("Amplitude Similarity Score: {:.2f}".format(metrics["Similarity"]))
 
@@ -615,8 +616,8 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     O_out = m_cov['Outliers']           # already [0,1]
     S_PCA = m_geom['PCA_Compactness']    # already [0,1]
     S_UM  = m_geom['UMAP_Compactness']   # already [0,1]
-    D_PCA = m_geom['PCA_Separation']     # already [0,1] (overlap score)
-    D_UM  = m_geom['UMAP_Separation']    # already [0,1]
+    D_PCA = m_geom['PCA_OverlapMahalanobis']     # already [0,1] (overlap score)
+    D_UM  = m_geom['UMAP_OverlapMahalanobis']    # already [0,1]
 
     # Normalize intrinsic diversity ratios (symmetrically centered at 1)
     U_NN   = normalize_ratio(m_intr['Uniqueness_NN'])
@@ -651,16 +652,16 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     )
 
     # Metrics printout
-    print(f"Diversity Score : {diversity_score:.3f}")
-    print(f"Coverage             : {C_cov:.3f}")
-    print(f"Outlier Goodness     : {O_out:.3f}")
-    print(f"PCA Compactness      : {S_PCA:.3f}")
-    print(f"UMAP Compactness     : {S_UM:.3f}")
-    print(f"PCA Overlap (Separation↑): {D_PCA:.3f}")
-    print(f"UMAP Overlap (Separation↑): {D_UM:.3f}")
-    print(f"Uniqueness (NN ratio norm.) : {U_NN:.3f}")
-    print(f"Local Diversity (norm.)     : {L_loc:.3f}")
-    print(f"Global Diversity (norm.)    : {G_glob:.3f}")
+    print(f"Diversity Score: {diversity_score:.3f}")
+    print(f"Coverage: {C_cov:.3f}")
+    print(f"Outlier Goodness: {O_out:.3f}")
+    print(f"PCA Compactness: {S_PCA:.3f}")
+    print(f"UMAP Compactness: {S_UM:.3f}")
+    print(f"PCA Overlap: {D_PCA:.3f}")
+    print(f"UMAP Overlap: {D_UM:.3f}")
+    print(f"Uniqueness: {U_NN:.3f}")
+    print(f"Local Diversity: {L_loc:.3f}")
+    print(f"Global Diversity: {G_glob:.3f}")
 
 
     return diversity_score
@@ -762,4 +763,3 @@ def compute_privacy_score(real_data, synthetic_data, weights: dict | None = None
     print(f"  - MIR Score: {scores['mir']:.2f}")
 
     return privacy_score
-
