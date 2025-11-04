@@ -45,7 +45,7 @@ seege/                       # Your root project folder
 - Diversity
 - Privacy
 
-  ## Prerequisites
+## Prerequisites
 - Python 3.10+
 - macOS (tested), Linux/Windows should work
 - `pip` and a virtual environment tool
@@ -97,12 +97,14 @@ PolyForm Noncommercial 1.0.0 © 2025 Inês A. P. Silveira
 ## Citation
 If you seege_ in your work , please cite it as follows:
 
-@misc{seege_,
-  title        = {seege\_: a Python library for synthetic EEG evaluation},
+```bibtex
+@software{seege_2025,
+  title        = {seege_: a Python library for synthetic EEG evaluation},
   author       = {Silveira, Inês A. P.},
   year         = {2025},
-  howpublished = {\url{https://github.com/inesapsilveira/seege_}},
-  note         = {Version 0.1.0. License: PolyForm Noncommercial 1.0.0}
+  url          = {https://github.com/BiosignalsLibphys/seege_},
+  version      = {0.1.0},
+  note         = {License: PolyForm Noncommercial 1.0.0}
 }
 
 
