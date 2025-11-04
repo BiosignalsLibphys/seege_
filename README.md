@@ -95,14 +95,14 @@ score = compute_diversity_score(real_data, synthetic_data)
 PolyForm Noncommercial 1.0.0 © 2025 Inês A. P. Silveira
 
 ## Citation
-If you seege_ in worl, please cite use as follows:
+If you seege_ in your work , please cite it as follows:
 
-@misc{seege,
-  title = {{seege\_}: a python library for synthetic EEG evaluation},
-  url = {https://github.com/BiosignalsLibphys/seege_},
-  author = {Silveira, Inês},
-  license = {Version 0.1.0. License: PolyForm Noncommercial 1.0.0},
-  year = {2025},
+@misc{seege_,
+  title        = {seege\_: a Python library for synthetic EEG evaluation},
+  author       = {Silveira, Inês A. P.},
+  year         = {2025},
+  howpublished = {\url{https://github.com/inesapsilveira/seege_}},
+  note         = {Version 0.1.0. License: PolyForm Noncommercial 1.0.0}
 }
 
 
