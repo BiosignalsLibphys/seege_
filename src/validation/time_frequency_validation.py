@@ -1,7 +1,6 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy import signal
-from scalogram_similarity import ScalogramSimilarity  # keep your class file name
+from time_frequency_fidelity import *
 from typing import Dict, List, Tuple
 
 
@@ -107,7 +106,7 @@ def validate_scalogram_similarity():
     duration = 2.0
 
     signals, t = generate_signals(fs=fs, duration=duration, powerline_freq=50)
-    analyzer = ScalogramSimilarity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
+    analyzer = TimeFrequencyFidelity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
 
     # Plot the generated signals (grid)
     num = len(signals)
@@ -185,7 +184,7 @@ def validate_mean_scalogram_similarity():
     fs = 2048
     duration = 2.0
     signals, _ = generate_signals(fs=fs, duration=duration, powerline_freq=50)
-    analyzer = ScalogramSimilarity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
+    analyzer = TimeFrequencyFidelity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
 
     # Build small cohorts (same length signals)
     rng = np.random.default_rng(123)
@@ -226,8 +225,7 @@ def validate_mean_scalogram_similarity():
 
 
 # Helpers for mean-scalogram validation
-
-def _compare_two_scalograms(analyzer: ScalogramSimilarity,
+def _compare_two_scalograms(analyzer: TimeFrequencyFidelity,
                             A: np.ndarray,
                             B: np.ndarray) -> Dict[str, float]:
     """
@@ -270,7 +268,7 @@ def validate_burst_statistics_pairs():
     fs = 2048
     duration = 2.0
     signals, _ = generate_signals(fs=fs, duration=duration, powerline_freq=50)
-    analyzer = ScalogramSimilarity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
+    analyzer = TimeFrequencyFidelity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
 
     pairs = [
         ("Sine vs small noise", signals["sine_clean"], signals["sine_small_noise"]),
@@ -303,7 +301,7 @@ def validate_burst_statistics_sets():
     fs = 2048
     duration = 2.0
     signals, _ = generate_signals(fs=fs, duration=duration, powerline_freq=50)
-    analyzer = ScalogramSimilarity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
+    analyzer = TimeFrequencyFidelity(fs=fs, freq_min=0.5, freq_max=100, num_freqs=100)
 
     rng = np.random.default_rng(456)
 
