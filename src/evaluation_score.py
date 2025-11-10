@@ -1,9 +1,9 @@
 
-from amplitude_similarity import *
-from time_similarity import *
-from frequency_similarity import *
-from scalogram_similarity import *
-from fractal_similarity import *
+from amplitude_fidelity import *
+from time_fidelity import *
+from frequency_fidelity import *
+from time_frequency_fidelity import *
+from complexity_fidelity import *
 from diversity import *
 from privacy import *
 
@@ -11,12 +11,12 @@ def _sim(a, b, eps=1e-12):
     """Normalised absolute-difference similarity in [0,1]."""
     return 1.0 - np.abs(a - b) / (np.abs(a) + np.abs(b) + eps)
 
-def compute_amplitude_similarity_score(real_data, synthetic_data, fs, *,
+def compute_amplitude_fidelity_score(real_data, synthetic_data, fs, *,
                                        mode: str = "all_vs_all",
                                        nperseg: int = 256):
     """
     Computes the Feature Selective Validation (FSV) similarity score
-    between real and synthetic signals using the AmplitudeSimilarity class.
+    between real and synthetic signals using the AmplitudeFidelity class.
 
     Parameters
     ----------
@@ -37,34 +37,31 @@ def compute_amplitude_similarity_score(real_data, synthetic_data, fs, *,
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
     synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
 
-    evaluation_score.compute_amplitude_similarity_score(real_data, synthetic_data, fs=2048)
-    evaluation_score.compute_amplitude_similarity_score(real_data[0], synthetic_data[0], fs=2048)
+    evaluation_score.compute_amplitude_fidelity_score(real_data, synthetic_data, fs=2048)
+    evaluation_score.compute_amplitude_fidelity_score(real_data[0], synthetic_data[0], fs=2048)
 
     Returns
     -------
     float
-        Mean FSV similarity score.
+        Mean FSV fidelity score.
     """
-    fsv = AmplitudeSimilarity(fs)
-    metrics = fsv.compute_metrics(real_data, synthetic_data,mode=mode, nperseg=nperseg)
+    fsv = AmplitudeFidelity(fs)
+    metrics = fsv.compute_amplitude_metrics(real_data, synthetic_data,mode=mode, nperseg=nperseg)
 
-    print("Amplitude Similarity Score: {:.2f}".format(metrics["Similarity"]))
+    print("Amplitude Fidelity Score: {:.2f}".format(metrics["Similarity"]))
 
     return metrics["Similarity"]
 
-def compute_time_similarity_score(real_data, synthetic_data, weights=None):
+def compute_time_fidelity_score(real_data, synthetic_data, weights=None):
     """
-    Compute a time-domain similarity score between real and synthetic signals
-    using Hjorth parameter statistics and entropy/complexity descriptors.
+    Compute a time-domain fidelity score between real and synthetic signals
+    using Hjorth parameter statistics.
 
     Integrated components (each mapped as S = 1/(1 + distance)):
         1. Hjorth: Activity (WD)
         2. Hjorth: Mobility (WD)
         3. Hjorth: Complexity (WD)
         4. Hjorth: Mahalanobis distance (means)
-        5. Sample Entropy (WD_SampEn)
-        6. Permutation Entropy (WD_PermEn)
-        7. Lempel–Ziv Complexity (WD_LZC)
 
     Parameters
     ----------
@@ -74,38 +71,27 @@ def compute_time_similarity_score(real_data, synthetic_data, weights=None):
         Synthetic signals with the same shape as real_data.
     weights : dict, optional
         Weights for the components. Keys:
-        {'activity','mobility','complexity','mahalanobis','sampen','permen','lzc'}.
-        Default: equal weights across all provided components (1/7 each).
+        {'activity','mobility','complexity','mahalanobis'}.
+        Default: equal weights across all provided components 0.25 each.
 
     Returns
     -------
     float
-        Composite time-domain similarity score in [0, 1].
+        Composite time-domain fidelity score in [0, 1].
     """
-    # Defaults (auto-balance across 7 components)
+    # Defaults (auto-balance across 4 components)
     if weights is None:
-        w = 1.0 / 7.0
+        w = 1.0 / 4.0
         weights = {
-            'activity': w, 'mobility': w, 'complexity': w, 'mahalanobis': w,
-            'sampen': w, 'permen': w, 'lzc': w
+            'activity': w, 'mobility': w, 'complexity': w, 'mahalanobis': w
         }
     # Ensure all keys exist; missing ones default to 0 (excluded from sum)
-    for k in ('activity','mobility','complexity','mahalanobis','sampen','permen','lzc'):
+    for k in ('activity','mobility','complexity','mahalanobis'):
         weights.setdefault(k, 0.0)
 
     # Compute base Hjorth metrics
-    ts = TimeSimilarity()
+    ts = TimeFidelity()
     hj = ts.compute_hjorth_metrics(real_data, synthetic_data, verbose=False)
-
-    # Compute entropy/complexity distances
-    ec = ts.compute_entropy_complexity_metrics(
-        real_data, synthetic_data,
-        sampen_m=2, sampen_r=None,       # r defaults to 0.2*std(signal)
-        permen_m=3, permen_tau=1,
-        lzc_threshold=None,              # median binarization
-        n_surrogates=0,                  # set >0 to add nonlinearity z-scores (not used in score)
-        verbose=False
-    )
 
     # Helper: distance -> similarity with NaN/Inf safety
     import numpy as _np
@@ -121,36 +107,26 @@ def compute_time_similarity_score(real_data, synthetic_data, weights=None):
     complexity_score  = _sim(hj['WD_Complexity'])
     mahalanobis_score = _sim(hj['Mahalanobis'])
 
-    # Entropy/complexity similarities
-    sampen_score = _sim(ec.get('WD_SampEn', _np.nan))
-    permen_score = _sim(ec.get('WD_PermEn', _np.nan))
-    lzc_score    = _sim(ec.get('WD_LZC', _np.nan))
 
     # Weighted combination
-    time_similarity_score = (
+    time_fidelity_score = (
         weights['activity']    * activity_score   +
         weights['mobility']    * mobility_score   +
         weights['complexity']  * complexity_score +
-        weights['mahalanobis'] * mahalanobis_score+
-        weights['sampen']      * sampen_score     +
-        weights['permen']      * permen_score     +
-        weights['lzc']         * lzc_score
+        weights['mahalanobis'] * mahalanobis_score
     )
 
     # Print components
-    print(f"Time Similarity Score  : {time_similarity_score:.3f}")
-    print("Time Similarity Components:")
+    print(f"Time Fidelity Score  : {time_fidelity_score:.3f}")
+    print("Time Fidelity Components:")
     print(f"  Activity: {activity_score:.3f}")
     print(f"  Mobility: {mobility_score:.3f}")
     print(f"  Complexity: {complexity_score:.3f}")
     print(f"  Mahalanobis: {mahalanobis_score:.3f}")
-    print(f"  SampEn: {sampen_score:.3f}")
-    print(f"  PermEn (: {permen_score:.3f}")
-    print(f"  LZC: {lzc_score:.3f}")
 
-    return time_similarity_score
+    return time_fidelity_score
 
-def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=None):
+def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None):
     """
     Compute a similarity score between real and synthetic signals that blends
     spectral-band power, dominant frequency, coherence and a PSD–Wasserstein
@@ -178,12 +154,12 @@ def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=No
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
     synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
 
-    evaluation_score.compute_frequency_similarity_score(real_data, synthetic_data, fs=2048)
+    evaluation_score.compute_frequency_fidelity_score(real_data, synthetic_data, fs=2048)
 
     Returns
     -------
     float
-        Composite frequency-domain similarity score in the range (0, 1].
+        Composite frequency-domain fidelity score in the range (0, 1].
     """
     # Default values definition
 
@@ -193,8 +169,8 @@ def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=No
     detrend = 'constant'
     overlap = 0.5  # 50%
 
-    # Initialize FrequencySimilarity class
-    frequency_similarity = FrequencySimilarity(fs,
+    # Initialize FrequencyFidelity class
+    frequency_fidelity = FrequencyFidelity(fs,
                  analysis_band=analysis_band,
                  win_seconds=win_seconds,
                  window=window,
@@ -220,13 +196,13 @@ def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=No
 
     # 1) Relative power
     freqs_r, psd_r, rel_power_r, dominant_freq_r = \
-        frequency_similarity.compute_relative_power(real_data, analysis_band=analysis_band,
+        frequency_fidelity.compute_relative_power(real_data, analysis_band=analysis_band,
                  win_seconds=win_seconds,
                  window=window,
                  detrend=detrend,
                  overlap=overlap)
     freqs_s, psd_s, rel_power_s, dominant_freq_s = \
-        frequency_similarity.compute_relative_power(synthetic_data,analysis_band=analysis_band,
+        frequency_fidelity.compute_relative_power(synthetic_data,analysis_band=analysis_band,
                  win_seconds=win_seconds,
                  window=window,
                  detrend=detrend,
@@ -244,7 +220,7 @@ def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=No
     dominant_freq_score = max(0.2, 1.0 - freq_diff / 3.0)
 
     # 3) Coherence
-    coh = frequency_similarity.spectral_coherence(
+    coh = frequency_fidelity.spectral_coherence(
         real_data, synthetic_data,
         mode="all_vs_all", per_band=False,
         analysis_band=analysis_band, win_seconds=2.0,
@@ -254,7 +230,7 @@ def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=No
     mean_coherence = float(np.clip(mean_coherence, 0.0, 1.0))
 
     # 4) Spectral Wasserstein distance
-    wd_psd = frequency_similarity.spectral_wasserstein_distance(
+    wd_psd = frequency_fidelity.spectral_wasserstein_distance(
         real_data, synthetic_data,
         fmin=analysis_band[0],
         fmax=analysis_band[1],
@@ -264,22 +240,22 @@ def compute_frequency_similarity_score(real_data, synthetic_data, fs, weights=No
     wasserstein_score = 1.0 / (1.0 + wd_psd) if np.isfinite(wd_psd) else 0.2
 
     # Composite score
-    frequency_similarity_score = (
+    frequency_fidelity_score = (
         weights['relative']      * relative_power_score  +
         weights['dom_freq']      * dominant_freq_score   +
         weights['psd_coherence'] * mean_coherence        +
         weights['wasserstein']   * wasserstein_score
     )
 
-    print(f"Frequency Similarity Score: {frequency_similarity_score:.2f}")
-    return frequency_similarity_score
+    print(f"Frequency Fidelity Score: {frequency_fidelity_score:.2f}")
+    return frequency_fidelity_score
 
 
-def compute_scalogram_similarity_score(real_data, synthetic_data, fs, *, weights=None, mode: str = "auto",
+def compute_time_frequency_fidelity_score(real_data, synthetic_data, fs, *, weights=None, mode: str = "auto",
     pad: bool = True, rr_zip_strategy: str = "consecutive", ss_zip_strategy: str = "consecutive",return_sd: bool = False,
     return_per_pair: bool = False, verbose: bool = True):
     """
-    Composite scalogram similarity for 1-D or 2-D inputs.
+    Composite time frequnecy similarity for 1-D or 2-D inputs.
     Reuses `compute_scalogram_similarity_metrics` and combines RS per-pair metrics:
 
         score_i = w_cssim * SSIM_i
@@ -313,7 +289,7 @@ def compute_scalogram_similarity_score(real_data, synthetic_data, fs, *, weights
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
     synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
 
-    evaluation_score.compute_scalogram_similarity_score(real_data, synthetic_data, fs=2048)
+    evaluation_score.compute_scalogram_fidelity_score(real_data, synthetic_data, fs=2048)
 
     Returns
     -------
@@ -347,7 +323,7 @@ def compute_scalogram_similarity_score(real_data, synthetic_data, fs, *, weights
     else:
         eff_mode = mode
 
-    scalo = ScalogramSimilarity(fs=fs)
+    scalo = TimeFrequencyFidelity(fs=fs)
 
     # Reuse your metrics method (does RS, RR, SS under the same mode/strategies)
     metrics = scalo.compute_scalogram_similarity_metrics(
@@ -377,7 +353,7 @@ def compute_scalogram_similarity_score(real_data, synthetic_data, fs, *, weights
 
     if verbose:
         label = eff_mode if eff_mode != "zip" else f"zip"
-        print(f"Scalogram Similarity Score: {mean_score:.3f} | mode: {label}, pairs: {len(scores)}")
+        print(f"Time-frequency Fidelity Score: {mean_score:.3f} | mode: {label}, pairs: {len(scores)}")
 
     out = (mean_score,)
     if return_sd:
@@ -387,50 +363,73 @@ def compute_scalogram_similarity_score(real_data, synthetic_data, fs, *, weights
     return out if len(out) > 1 else out[0]
 
 
-def compute_fractality_score(real_data,
-                             synthetic_data,
-                             q_range=np.arange(-5, 5, 0.1),
-                             weights=None):
+def compute_complexity_fidelity_score(
+        real_data,
+        synthetic_data,
+        q_range=np.arange(-5, 5, 0.1),
+        weights=None
+    ):
     """
-    Fractality-similarity score based on DCCA, MFDFA and MFDCCA results.
+    Complexity fidelity score combining fractal and entropy/complexity similarities.
 
-    The function instantiates :class:`FractalSimilarity` three times—once for
-    each method—extracts the stored means, converts them to pairwise
-    similarities, and combines them with user-tunable weights.
+    This function computes six subscores that reflect how closely synthetic signals
+    reproduce the complexity properties of real signals. Each subscore is mapped to
+    [0,1] (higher = more similar), and the final score is the weighted average of
+    available subscores (ignoring any NaNs).
+
+    Integrated components
+    ---------------------
+    Fractal (multifractal / cross-fractal), mapped via range-aware similarities:
+      1) DCCA   — cross Hurst exponent similarity   (S_H_dcca)
+      2) MFDFA  — single-series H + H(q) curve      (S_H_mfdfa & S_Hq → F_MFDFA)
+      3) MFDCCA — cross H(q) + Δα spectrum width    (S_H_mfdcca & S_Dalpha → F_MFDCCA)
+
+    Entropy/complexity (distribution similarity via WD), mapped as S = 1 / (1 + WD):
+      4) Sample Entropy           (WD_SampEn → S_SampEn)
+      5) Permutation Entropy      (WD_PermEn → S_PermEn)
+      6) Lempel–Ziv Complexity    (WD_LZC    → S_LZC)
 
     Parameters
     ----------
     real_data, synthetic_data : list[np.ndarray] or np.ndarray
-        1-D signals; single arrays are auto-wrapped into lists.
+        1-D signals. A single 1-D array is auto-wrapped into a list. Signals should be
+        pre-normalized to comparable ranges when possible. NaN/inf signals are skipped.
     q_range : np.ndarray, optional
-        q-orders for multifractal analysis.
+        q-orders for multifractal analysis (used in MFDFA/MFDCCA). Default: np.arange(-5,5,0.1).
     weights : dict, optional
-        DCCA: 0.35, MFDFA: 0.36, MFDCCA: 0.30
-
-    Example usage:
-    --------------
-
-    real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
-    synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
-
-    evaluation_score.compute_fractality_score(real_data, synthetic_data)
-
+        Weights per subscore. If None, all six subscores share equal weight (=1/6):
+        {
+            'dcca': 1/6, 'mfdfa': 1/6, 'mfdcca': 1/6,
+            'sampen': 1/6, 'permen': 1/6, 'lzc': 1/6
+        }
+        Any NaN subscore is dropped and weights are renormalized over the remaining ones.
 
     Returns
     -------
     float
-        Fractality similarity in ``[0,1]`` (higher ⇒ closer match).
+        Complexity fidelity in [0,1] (higher ⇒ closer match).
+
+    Example
+    -------
+    real_data = np.random.randn(10, 2048)      # 10 real signals
+    synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals
+    complexity_score = compute_complexity_fidelity_score(real_data, synthetic_data)
     """
 
+    # Default: equal weights across ALL subscores (6 components)
     if weights is None:
-        # Weights across subscores (must sum to 1 after NaN filtering)
-        weights = {'dcca': 0.35, 'mfdfa': 0.35, 'mfdcca': 0.30}
+        weights = {
+            'dcca': 1/6, 'mfdfa': 1/6, 'mfdcca': 1/6,
+            'sampen': 1/6, 'permen': 1/6, 'lzc': 1/6
+        }
 
-        # Wrap 1D arrays
-    if isinstance(real_data, np.ndarray) and real_data.ndim == 1: real_data = [real_data]
-    if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1: synthetic_data = [synthetic_data]
+    # Wrap 1D arrays
+    if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
+        real_data = [real_data]
+    if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
+        synthetic_data = [synthetic_data]
 
-    # Auxiliary functions
+    # Helpers
     def _sim_range(a, b, lo, hi):
         # Range-aware similarity in [0,1]
         d = min(abs(float(a) - float(b)), hi - lo)
@@ -449,74 +448,95 @@ def compute_fractality_score(real_data,
                 Hqs.append(Hq)
         if not Hqs:
             return None
-        return np.nanmean(np.vstack(Hqs), axis=0)  # mean curve over signals
+        return np.nanmean(np.vstack(Hqs), axis=0)
 
     # DCCA (use Hxy only)
-    fs_dcca = FractalSimilarity(real_data, synthetic_data, method='DCCA', q_range=q_range)
+    fs_dcca = ComplexityFidelity(real_data, synthetic_data, method='DCCA', q_range=q_range)
     fs_dcca.compute_fractal_metrics()
     H_rr, H_rs = fs_dcca.means[:2]
-
-    # H range chosen tighter to penalize 0.5 vs 1.0 gaps
     S_H_dcca = _sim_range(H_rr, H_rs, lo=0.3, hi=1.2)
-    F_DCCA = S_H_dcca  # drop rho
+    F_DCCA = S_H_dcca  # rho dropped from scoring to avoid inflation
 
-    # MFDFA (H + H(q) curve)
-    fs_mfdfa = FractalSimilarity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
+    #  MFDFA: H level + H(q) curve shape
+    fs_mfdfa = ComplexityFidelity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
     fs_mfdfa.compute_fractal_metrics()
     H_r, H_s = fs_mfdfa.means
-
     S_H_mfdfa = _sim_range(H_r, H_s, lo=0.3, hi=1.2)
 
-    # H(q) curve similarity (single-series): average curves over each group
-    # Reuse the same scales as your class to keep consistency
-    dummy = FractalSimilarity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
+    dummy = ComplexityFidelity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
     Hq_r = _mean_Hq(real_data, q_range, dummy._get_win_sizes)
     Hq_s = _mean_Hq(synthetic_data, q_range, dummy._get_win_sizes)
     if Hq_r is not None and Hq_s is not None:
         rmse = float(np.sqrt(np.nanmean((Hq_r - Hq_s) ** 2)))
-        tau = 0.15  # smaller tau -> stricter
+        tau = 0.15
         S_Hq = float(np.exp(-rmse / tau))
     else:
         S_Hq = np.nan
 
-    #  Blend H level and H(q) shape
-    if np.isnan(S_Hq):
-        F_MFDFA = S_H_mfdfa
-    else:
-        F_MFDFA = 0.5 * S_H_mfdfa + 0.5 * S_Hq
+    F_MFDFA = S_H_mfdfa if np.isnan(S_Hq) else 0.5 * S_H_mfdfa + 0.5 * S_Hq
 
-    # MFDCCA (Hxy + Δα)
-    fs_mfdcca = FractalSimilarity(real_data, synthetic_data, method='MFDCCA', q_range=q_range)
+    #  MFDCCA: cross H(q) & Δα
+    fs_mfdcca = ComplexityFidelity(real_data, synthetic_data, method='MFDCCA', q_range=q_range)
     fs_mfdcca.compute_fractal_metrics()
     Hc_rr, Hc_rs = fs_mfdcca.means[:2]
     Da_rr, Da_rs = fs_mfdcca.deltaAlpha_means[:2]
 
     S_H_mfdcca = _sim_range(Hc_rr, Hc_rs, lo=0.3, hi=1.2)
-    S_Dalpha = _sim_range(Da_rr, Da_rs, lo=0.0, hi=0.5)  # broad but bounded
-
-    # Drop Fxy and p(q); they inflate similarity for independent processes
+    S_Dalpha = _sim_range(Da_rr, Da_rs, lo=0.0, hi=0.5)
     F_MFDCCA = 0.7 * S_H_mfdcca + 0.3 * S_Dalpha
 
-    # Aggregate subscores
-    subscores = {'dcca': F_DCCA, 'mfdfa': F_MFDFA, 'mfdcca': F_MFDCCA}
-    valid = [v for v in subscores.values() if np.isfinite(v)]
-    if not valid:
-        raise RuntimeError("Fractality score could not be computed (all NaN).")
+    # Entropy/complexity (WD → similarity)
+    # Use the class method to compute WDs; then map S = 1/(1+WD)
+    cf_entropy = ComplexityFidelity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
+    e = cf_entropy.compute_entropy_complexity_metrics(
+        real_data, synthetic_data,
+        sampen_m=2, sampen_r=None,  # r defaults to 0.2*std
+        permen_m=3, permen_tau=1,
+        lzc_threshold=None,
+        n_surrogates=0,             # set >0 if you want surrogate z-scores (not used in score)
+        verbose=False
+    )
 
-    numer = sum(weights[k] * v for k, v in subscores.items() if np.isfinite(v))
-    denom = sum(weights[k] for k, v in subscores.items() if np.isfinite(v))
+    def _to_sim(wd):
+        return np.nan if not np.isfinite(wd) else 1.0 / (1.0 + float(wd))
+
+    S_SampEn = _to_sim(e.get("WD_SampEn", np.nan))
+    S_PermEn = _to_sim(e.get("WD_PermEn", np.nan))
+    S_LZC    = _to_sim(e.get("WD_LZC",    np.nan))
+
+    # Aggregate
+    subscores = {
+        'dcca':   F_DCCA,
+        'mfdfa':  F_MFDFA,
+        'mfdcca': F_MFDCCA,
+        'sampen': S_SampEn,
+        'permen': S_PermEn,
+        'lzc':    S_LZC
+    }
+
+    valid_vals = [(k, v) for k, v in subscores.items() if np.isfinite(v)]
+    if not valid_vals:
+        raise RuntimeError("Complexity fidelity score could not be computed (all subscores NaN).")
+
+    numer = sum(weights[k] * subscores[k] for k, v in valid_vals)
+    denom = sum(weights[k] for k, v in valid_vals)
     score = numer / denom
 
-    print(f"Fractality Similarity Score: {score:0.2f}")
-    for k, v in subscores.items():
-        print(f"  {k.upper():7s}: {v:0.2f}")
+    # Pretty print
+    print(f"Complexity Fidelity Score: {score:0.2f}")
+    for k in ['dcca','mfdfa','mfdcca','sampen','permen','lzc']:
+        v = subscores[k]
+        vs = "nan" if not np.isfinite(v) else f"{v:0.2f}"
+        print(f"  {k.upper():7s}: {vs}")
 
     return score
 
 
+
 def compute_fidelity_score(real_data, synthetic_data, fs):
     """
-    Computes an overall fidelity score by averaging frequency, scalogram, and fractality similarity scores.
+    Computes an overall fidelity score by averaging amplitude, time, frequency, time-frequency,
+    and complexity fidelity scores.
 
     Parameters
     ----------
@@ -540,11 +560,11 @@ def compute_fidelity_score(real_data, synthetic_data, fs):
 
     evaluation_score.compute_fidelity_score(real_data, synthetic_data, fs=2048)
     """
-    amp_sim = compute_amplitude_similarity_score(real_data, synthetic_data, fs)
-    time_sim = compute_time_similarity_score(real_data, synthetic_data)
-    freq_sim = compute_frequency_similarity_score(real_data, synthetic_data, fs)
-    scalogram_sim = compute_scalogram_similarity_score(real_data, synthetic_data, fs)
-    fractal_sim = compute_fractality_score(real_data, synthetic_data)
+    amp_sim = compute_amplitude_fidelity_score(real_data, synthetic_data, fs)
+    time_sim = compute_time_fidelity_score(real_data, synthetic_data)
+    freq_sim = compute_frequency_fidelity_score(real_data, synthetic_data, fs)
+    scalogram_sim = compute_time_frequency_fidelity_score(real_data, synthetic_data, fs)
+    fractal_sim = compute_complexity_fidelity_score(real_data, synthetic_data)
 
     fidelity_score = (amp_sim + time_sim + freq_sim + scalogram_sim + fractal_sim) / 5
     print(f"Fidelity Score: {fidelity_score:.2f}")
