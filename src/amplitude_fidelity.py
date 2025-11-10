@@ -8,7 +8,7 @@ import pandas as pd
 # Set Arial as the default font
 rcParams['font.family'] = 'Arial'
 
-class AmplitudeSimilarity:
+class AmplitudeFidelity:
     """
     A class for evaluating amplitude similarity between real and synthetic signals
     using Feature Selective Validation (FSV) metrics in the frequency domain.
@@ -29,13 +29,13 @@ class AmplitudeSimilarity:
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
     synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
 
-    asim = AmplitudeSimilarity(fs=2048)
+    afid = AmplitudeFidelity(fs=2048)
 
-    metrics_dataset = asim.compute_fsv(real_data, synthetic_data)
-    asim.plot_fsv(metrics_dataset)
+    metrics_dataset = afid.compute_amplitude_metrics(real_data, synthetic_data)
+    afid.plot_amplitude_metrics(metrics_dataset)
 
-    metrics_sample = asim.compute_fsv(real_data[0], synthetic_data[0])
-    asim.plot_fsv(metrics_sample)
+    metrics_sample = afid.compute_metrics(real_data[0], synthetic_data[0])
+    afid.plot_metrics(metrics_sample)
 
     References:
     ----------
@@ -43,10 +43,10 @@ class AmplitudeSimilarity:
     """
 
     def __init__(self, fs):
-        """Initialize the AmplitudeSimilarity class with sampling frequency."""
+        """Initialize the AmplitudeFidelity class with sampling frequency."""
         self.fs = fs
 
-    def compute_fsv(self, real_data, synthetic_data, *,
+    def compute_amplitude_metrics(self, real_data, synthetic_data, *,
                         mode: str = "all_vs_all",  # "zip" or "all_vs_all"
                         nperseg: int = 256, return_per_pair: bool = False,
                         return_details: bool = False):
@@ -174,7 +174,7 @@ class AmplitudeSimilarity:
 
         return amplitude_metrics
 
-    def plot_fsv(self, metrics):
+    def plot_amplitude_metrics(self, metrics):
         """
         Plot the computed Feature Selective Validation metrics in a bar chart.
 
