@@ -2,10 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import cwt, morlet2
 
-class ScalogramSimilarity:
+class TimeFrequencyFidelity:
     """
-    A class to compute scalogram representations of signals and measure similarity between real and synthetic signals
-    using including SSIM, RMSE, and Cosine Similarity metrics.
+    A class to measure time-frequency similarity between real and synthetic signals, by computing and comparing
+    scalogram representations of signals, as well as bursts statistics.
 
     The scalogram is computed using **Continuous Wavelet Transform (CWT)** with **Morlet wavelets**.
 
@@ -21,19 +21,19 @@ class ScalogramSimilarity:
     real_data = np.random.randn(5, 2048)  # 5 real signals of length 2048
     synthetic_data = np.random.randn(5, 2048)  # 5 synthetic signals of length 2048
 
-    scalogram_analysis = ScalogramSimilarity(fs=2048)
+    time_frequency_analysis = TimeFrequencyFidelity(fs=2048)
 
     # Compute similarity metrics
-    similarity_results = scalogram_analysis.compute_scalogram_similarity_metrics(real_data, synthetic_data)
+    similarity_results = time_frequency_analysis.compute_scalogram_similarity_metrics(real_data, synthetic_data)
 
     # Plot a scalogram for visual comparison
-    scalogram_analysis.plot_scalograms(real_data, synthetic_data, signal_index_real=0, signal_index_synth=4)
+    time_frequency_analysis.plot_scalograms(real_data, synthetic_data, signal_index_real=0, signal_index_synth=4)
 
     # Plot mean scalograms for both datasets
-    scalogram_analysis.plot_mean_scalograms(real_data, synthetic_data, save=None)
+    time_frequency_analysis.plot_mean_scalograms(real_data, synthetic_data, save=None)
 
-    # Compute burst statistics within a frequency band
-    burst_results = scalogram_analysis.compute_burst_statistics(real_data, synthetic_data, band=(13, 30),
+    # Compute burst statistics within a frequency band (beta in this case)
+    burst_results = time_frequency_analysis.compute_burst_statistics(real_data, synthetic_data, band=(13, 30),
     threshold="percentile", p=70.0, min_duration_ms=50.0, merge_gap_ms=50.0, smooth_ms=20.0)
 
     References:
@@ -44,7 +44,7 @@ class ScalogramSimilarity:
     """
     def __init__(self, *, fs: int, freq_min=0.5, freq_max=100, num_freqs=100) -> None:
         """
-        Initializes the ScalogramSimilarity class for computing scalogram representations
+        Initializes the TimeFrequencyFidelity class for computing scalogram representations
         of signals and evaluating their similarity using various metrics.
 
         Parameters:
@@ -870,5 +870,4 @@ class ScalogramSimilarity:
             "RR_dispersion": wd_rr,
             "SS_dispersion": wd_ss
         }
-
 
