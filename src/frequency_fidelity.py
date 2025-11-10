@@ -5,12 +5,11 @@ from scipy.signal import welch, savgol_filter, coherence
 from scipy.integrate import simps
 from scipy.stats import shapiro, ttest_rel, wilcoxon
 from scipy.stats import wasserstein_distance
-from sympy.physics.units import frequency
 
 # Set Arial as the default font
 rcParams['font.family'] = 'Arial'
 
-class FrequencySimilarity:
+class FrequencyFidelity:
     """
     A class for evaluating frequency similarity between real and synthetic signals
     using Power Spectral Density (PSD) analysis and statistical tests.
@@ -25,7 +24,7 @@ class FrequencySimilarity:
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
     synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
 
-    frequency_analysis = FrequencySimilarity(fs=512)
+    frequency_analysis = FrequencyFidelity(fs=512)
     frequency_analysis.compare_relative_power(real_data, synthetic_data)
     frequency_analysis.spectral_coherence(real_data, synthetic_data)
     frequency_analysis.spectral_wasserstein_distance(real_data, synthetic_data)
@@ -59,7 +58,7 @@ class FrequencySimilarity:
                  detrend=detrend,
                  overlap=overlap):
         """
-        Initialize the FrequencySimilarity class with a given sampling frequency.
+        Initialize the FrequencyFidelity class with a given sampling frequency.
 
         Parameters
         ----------
