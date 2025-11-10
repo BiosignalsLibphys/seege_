@@ -1,4 +1,5 @@
-from frequency_similarity import FrequencySimilarity
+
+from frequency_fidelity import *
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -29,7 +30,7 @@ def main_validation():
     gamma = 40
 
     # HFOs
-    ripple_freq      = 200   # 80–250 Hz
+    ripple_freq      = 200   # 150–250 Hz
     fast_ripple_freq = 320   # 250–500 Hz
 
     # Signals
@@ -60,7 +61,7 @@ def main_validation():
         ("FastRipple vs Ripple",     fast_ripple_test, ripple_test,       (fast_ripple_freq, ripple_freq), 0.0, "Large"),
     ]
 
-    freq_analyzer = FrequencySimilarity(fs=fs)
+    freq_analyzer = FrequencyFidelity(fs=fs)
     all_results = []
 
     # Figure with 2 rows (time + PSD) and one column per scenario
