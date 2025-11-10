@@ -1,6 +1,8 @@
 from scipy.signal import square
 from scipy.integrate import odeint
-from amplitude_similarity import *
+from amplitude_fidelity import *
+
+# Signal generation functions
 
 def generate_signals(signal_type, fs=1000, duration=1, noise_level=0.0, seed=42):
     np.random.seed(seed)
@@ -36,7 +38,7 @@ def generate_lorenz_signal(length, dt=0.001, sigma=10, rho=28, beta=8/3):
     X = odeint(lorenz, X0, t, args=(sigma, rho, beta))
     return X[:, 0]
 
-# FSV threshold interpretation 
+# FSV threshold interpretation
 
 def interpret_fsv(value):
     """
@@ -58,7 +60,7 @@ def interpret_fsv(value):
     else:
         return "Very Poor"
 
-# Test cases with explicit noise levels 
+# Test cases with explicit noise levels
 
 test_cases = [
     ("Identical Sine Waves", "sine", "sine", 0.0, "Excellent"),
@@ -68,10 +70,10 @@ test_cases = [
     ("Lorenz vs White Noise", "lorenz", "white_noise", 0.0, "Very Poor"),
 ]
 
-# Validation execution 
+# Validation execution
 
 def run_validation_tests(fs=1000, duration=1):
-    asim = AmplitudeSimilarity(fs)
+    asim = AmplitudeFidelity(fs)
 
     print("\nAmplitude Similarity Validation Tests\n" + "-"*60)
 
@@ -79,7 +81,7 @@ def run_validation_tests(fs=1000, duration=1):
         signal1 = generate_signals(sig1_type, fs, duration)
         signal2 = generate_signals(sig2_type, fs, duration, noise_level=noise_level)
 
-        metrics = asim.compute_fsv(signal1, signal2)
+        metrics = asim.compute_metrics(signal1, signal2)
         gdm_interp = interpret_fsv(metrics["GDM"])
 
         print(f"\nTest Case: {test_name}")
