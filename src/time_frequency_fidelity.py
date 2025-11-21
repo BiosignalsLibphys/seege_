@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import cwt, morlet2
+from skimage.metrics import structural_similarity as ssim, mean_squared_error
+from sklearn.metrics.pairwise import cosine_similarity
 
 class TimeFrequencyFidelity:
     """
@@ -335,9 +337,6 @@ class TimeFrequencyFidelity:
         dict
             Means, SDs, and per-pair lists for RS; summaries for RR and SS.
         """
-        import numpy as np
-        from skimage.metrics import structural_similarity as ssim, mean_squared_error
-        from sklearn.metrics.pairwise import cosine_similarity
 
         # Normalize to 2D
         R = np.asarray(real_data, dtype=float)
