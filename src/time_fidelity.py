@@ -24,8 +24,7 @@ class TimeFidelity:
 
     tf = TimeFidelity()
     hjorth_results = tf.compute_hjorth_metrics(real_data, synthetic_data, verbose=True)
-    hjorth_hist = tf.plot_hjorth_histograms(real_data, synthetic_data)
-    hjorth_3d = tf.plot_hjorth_3d(real_data, synthetic_data)
+    hjorth_figures = tf.plot_hjorth_metrics(real_data, synthetic_data)
 
     Notes:
     ------
@@ -102,66 +101,68 @@ class TimeFidelity:
             "Synthetic_Complexity": syn_mean[2],
         }
 
-    def plot_hjorth_histograms(self, real_signals, synthetic_signals):
+    def plot_hjorth_metrics(self, real_signals, synthetic_signals):
         """
-        Plot histogram comparison for each Hjorth parameter.
+        Plot Hjorth parameter distributions and 3D scatter in a single 2x2 figure.
 
         Parameters
         ----------
-        real_data : array
+        real_signals : array-like
             1D (T,) or 2D (N x T) real signals.
-        synthetic_data : array
+        synthetic_signals : array-like
             1D (T,) or 2D (N x T) synthetic signals.
-
         """
+        # Compute Hjorth parameters once
         real_hjorth = np.array([self.hjorth_parameters(sig) for sig in real_signals])
         synthetic_hjorth = np.array([self.hjorth_parameters(sig) for sig in synthetic_signals])
+
+        # Sanity check: expect 3 parameters (Activity, Mobility, Complexity)
+        if real_hjorth.shape[1] != 3 or synthetic_hjorth.shape[1] != 3:
+            raise ValueError("Hjorth arrays must have shape (N, 3): Activity, Mobility, Complexity.")
 
         param_names = ["Activity", "Mobility", "Complexity"]
-        for i in range(3):
-            plt.figure(figsize=(8, 4))
-            sns.histplot(real_hjorth[:, i], label='Real', kde=True, stat="density", color='limegreen')
-            sns.histplot(synthetic_hjorth[:, i], label='Synthetic', kde=True, stat="density", color='lightskyblue')
-            plt.title(f"Hjorth {param_names[i]} Histogram", fontsize=20)
-            plt.xlabel(param_names[i], fontsize = 15)
-            plt.ylabel("Density", fontsize= 15)
-            plt.legend(fontsize = 15)
-            plt.tight_layout()
-            plt.show()
 
-    def plot_hjorth_3d(self, real_signals, synthetic_signals):
-        """
-        3D scatter plot of Activity, Mobility, and Complexity.
+        # Create 2x2 figure
+        fig = plt.figure(figsize=(14, 10))
 
-        Parameters
-        ----------
-        real_data : array
-            1D (T,) or 2D (N x T) real signals.
-        synthetic_data : array
-            1D (T,) or 2D (N x T) synthetic signals.
-        """
+        # Histograms: Activity, Mobility, Complexity (3 subplots)
+        for i, name in enumerate(param_names):
+            ax = fig.add_subplot(2, 2, i + 1)
+            sns.histplot(real_hjorth[:, i],
+                         label="Real",
+                         kde=True,
+                         stat="density",
+                         color="limegreen",
+                         ax=ax)
+            sns.histplot(synthetic_hjorth[:, i],
+                         label="Synthetic",
+                         kde=True,
+                         stat="density",
+                         color="lightskyblue",
+                         ax=ax)
+            ax.set_title(f"Hjorth {name} Histogram", fontsize=20)
+            ax.set_xlabel(name, fontsize=15)
+            ax.set_ylabel("Density", fontsize=15)
+            if i == 0:  # legend only on first histogram to avoid repetition
+                ax.legend(fontsize=12)
 
-        real_hjorth = np.array([self.hjorth_parameters(sig) for sig in real_signals])
-        synthetic_hjorth = np.array([self.hjorth_parameters(sig) for sig in synthetic_signals])
+        # 3D scatter on bottom-right subplot 
+        ax3d = fig.add_subplot(2, 2, 4, projection="3d")
 
-        fig = plt.figure(figsize=(8, 6))
-        ax = fig.add_subplot(111, projection='3d')
+        ax3d.scatter(
+            real_hjorth[:, 0], real_hjorth[:, 1], real_hjorth[:, 2],
+            c="limegreen", label="Real", alpha=0.7, edgecolor="black"
+        )
+        ax3d.scatter(
+            synthetic_hjorth[:, 0], synthetic_hjorth[:, 1], synthetic_hjorth[:, 2],
+            c="lightskyblue", label="Synthetic", alpha=0.7, edgecolor="black"
+        )
 
-        # Ensure real_hjorth and synthetic_hjorth are 2D arrays with three columns
-        if real_hjorth.shape[1] != 3 or synthetic_hjorth.shape[1] != 3:
-            raise ValueError("Input arrays must have three columns: Activity, Mobility, Complexity.")
+        ax3d.set_title("3D Hjorth Parameters", fontsize=20)
+        ax3d.set_xlabel("Activity", fontsize=15)
+        ax3d.set_ylabel("Mobility", fontsize=15)
+        ax3d.set_zlabel("Complexity", fontsize=15)
+        ax3d.legend(fontsize=12)
 
-        ax.scatter(real_hjorth[:, 0], real_hjorth[:, 1], real_hjorth[:, 2],
-                   c='limegreen', label='Real', alpha=0.7, edgecolor='black')
-        ax.scatter(synthetic_hjorth[:, 0], synthetic_hjorth[:, 1], synthetic_hjorth[:, 2],
-                   c='lightskyblue', label='Synthetic', alpha=0.7, edgecolor='black')
-
-        ax.set_title("3D Hjorth Parameters", fontsize=20)
-        ax.set_xlabel("Activity", fontsize = 15)
-        ax.set_ylabel("Mobility", fontsize = 15)
-        ax.set_zlabel("Complexity", fontsize = 15)
-        ax.legend(fontsize = 15)
         plt.tight_layout()
         plt.show()
-
-
