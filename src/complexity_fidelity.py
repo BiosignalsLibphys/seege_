@@ -134,24 +134,31 @@ class ComplexityFidelity:
 
     def plot_metrics(self):
         """
-        Perform the selected fractal analysis method and produce relevant
-        plots. Calls one of the internal methods based on self.method.
+        Produce plots for the selected fractal analysis method.
         """
         if self.method == 'DCCA':
-            self.plot_hurst_correlation()
-            self.plot_rho_correlation()
+            # 1 row × 2 columns: Hurst and rho
+            fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+            self.plot_hurst_correlation(ax=axs[0])
+            self.plot_rho_correlation(ax=axs[1])
+            plt.tight_layout()
+            plt.show()
 
         elif self.method == 'MFDFA':
             raise ValueError("Invalid method. This method does not produce plots.")
 
         elif self.method == 'MFDCCA':
-            self.plot_hurst_correlation()
-            self.plot_p_correlation()
-            self.plot_Fq_correlation()
-            self.plot_deltaAlpha()
-
+            # 2 × 2: Hurst, p(q), Fxy, Δα
+            fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+            self.plot_hurst_correlation(ax=axs[0, 0])
+            self.plot_p_correlation(ax=axs[0, 1])
+            self.plot_Fq_correlation(ax=axs[1, 0])
+            self.plot_deltaAlpha(ax=axs[1, 1])
+            plt.tight_layout()
+            plt.show()
         else:
             raise ValueError("Invalid method. Choose 'DCCA' or 'MFDCCA'")
+
 
 
     # Plotting
@@ -167,108 +174,219 @@ class ComplexityFidelity:
             "ytick.labelsize": 15,
             "legend.fontsize": 15,
         })
-    def plot_hurst_correlation(self):
+
+    def plot_hurst_correlation(self, ax=None):
         """Plot the average cross Hurst exponents for each pair category, with error bars."""
         if not self.means:
             print("No H exponents to plot.")
             return
 
-        # Set plot style
         self._set_plot_style()
-        plt.figure(figsize=(8,5))
-        sns.barplot(x=self.categories, y=self.means, capsize=0.2, hue=self.categories,
-                    palette=['lightskyblue','limegreen','grey'], legend=False)
-        plt.errorbar(x=self.categories, y=self.means, yerr=self.stds,
-                     fmt='none', capsize=5, color='black')
-        plt.ylabel('Mean cross Hurst exponent ($\overline{H}_{xy})$ $q \in [–5, 5]$', fontsize=15)
-        plt.title(rf'{self.method} mean cross Hurst exponent $(\overline{{H}}_{{xy}})$', fontsize=20)
-        plt.gca().spines['top'].set_visible(False)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['left'].set_visible(False)
-        plt.gca().spines['bottom'].set_visible(False)
-        plt.tight_layout()
-        plt.show()
 
-    def plot_rho_correlation(self):
+        created_fig = False
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            created_fig = True
+
+        sns.barplot(
+            x=self.categories,
+            y=self.means,
+            capsize=0.2,
+            hue=self.categories,
+            palette=['lightskyblue', 'limegreen', 'grey'],
+            legend=False,
+            ax=ax
+        )
+
+        # errorbar uses numeric x positions 0..N-1
+        ax.errorbar(
+            x=range(len(self.categories)),
+            y=self.means,
+            yerr=self.stds,
+            fmt='none',
+            capsize=5,
+            color='black'
+        )
+
+        ax.set_ylabel('Mean cross Hurst exponent ($\\overline{H}_{xy}$), $q \\in [-5, 5]$')
+        ax.set_title(rf'{self.method} mean cross Hurst exponent $(\overline{{H}}_{{xy}})$')
+
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+
+    def plot_rho_correlation(self, ax=None):
         """Bar plot of correlation coefficients (rho) for DCCA."""
         if not self.rho_means:
             print("No correlation coefficients available to plot.")
             return
-        # Set plot style
-        self._set_plot_style()
-        plt.figure(figsize=(8,5))
-        sns.barplot(x=self.categories, y=self.rho_means, capsize=0.2, hue=self.categories,
-                    palette=['lightskyblue','limegreen','grey'], legend=False)
-        plt.errorbar(x=self.categories, y=self.rho_means, yerr=self.rho_stds,
-                     fmt='none', capsize=5, color='black')
-        plt.ylabel(rf'Mean correlation coefficients ($\bar{{\rho}}$)', fontsize=15)
-        plt.title(rf'{self.method} mean correlation coefficients ($\bar{{\rho}}$)', fontsize=20)
-        plt.gca().spines['top'].set_visible(False)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['left'].set_visible(False)
-        plt.gca().spines['bottom'].set_visible(False)
-        plt.tight_layout()
-        plt.show()
 
-    def plot_p_correlation(self):
+        self._set_plot_style()
+
+        created_fig = False
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            created_fig = True
+
+        sns.barplot(
+            x=self.categories,
+            y=self.rho_means,
+            capsize=0.2,
+            hue=self.categories,
+            palette=['lightskyblue', 'limegreen', 'grey'],
+            legend=False,
+            ax=ax
+        )
+
+        # again, numeric x positions 0..N-1
+        ax.errorbar(
+            x=range(len(self.categories)),
+            y=self.rho_means,
+            yerr=self.rho_stds,
+            fmt='none',
+            capsize=5,
+            color='black'
+        )
+
+        ax.set_ylabel(r'Mean correlation coefficients ($\bar{\rho}$)')
+        ax.set_title(rf'{self.method} mean correlation coefficients ($\bar{{\rho}}$)')
+
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+
+    def plot_p_correlation(self, ax=None):
         """Bar plot of the mean p(q) for MFDCCA cross-correlation if computed."""
         if not self.p_means:
             print("No p(q) values available to plot.")
             return
-        # Set plot style
-        self._set_plot_style()
-        plt.figure(figsize=(8,5))
-        sns.barplot(x=self.categories, y=self.p_means, capsize=0.2, hue=self.categories,
-                    palette=['lightskyblue','limegreen','grey'], legend=False)
-        plt.errorbar(x=self.categories, y=self.p_means, yerr=self.p_stds,
-                     fmt='none', capsize=5, color='black')
-        plt.ylabel(r'Mean cross-correlation $\langle p(q)\rangle$ $q \in [–5, 5]$', fontsize=15)
-        plt.title(r'MFDCCA mean cross-correlation $\langle p(q)\rangle$', fontsize=20)
-        plt.gca().spines['top'].set_visible(False)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['left'].set_visible(False)
-        plt.gca().spines['bottom'].set_visible(False)
-        plt.tight_layout()
-        plt.show()
 
-    def plot_Fq_correlation(self):
+        self._set_plot_style()
+
+        created_fig = False
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            created_fig = True
+
+        sns.barplot(
+            x=self.categories,
+            y=self.p_means,
+            capsize=0.2,
+            hue=self.categories,
+            palette=['lightskyblue', 'limegreen', 'grey'],
+            legend=False,
+            ax=ax
+        )
+        ax.errorbar(
+            x=range(len(self.categories)),
+            y=self.p_means,
+            yerr=self.p_stds,
+            fmt='none',
+            capsize=5,
+            color='black'
+        )
+        ax.set_ylabel(r'Mean cross-correlation $\langle p(q)\rangle$, $q \in [-5, 5]$')
+        ax.set_title(r'MFDCCA mean cross-correlation $\langle p(q)\rangle$')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+
+    def plot_Fq_correlation(self, ax=None):
         """Bar plot of the mean Fxy(q) for MFDCCA cross-fluctuation if computed."""
         if not self.Fq_means:
             print("No F_xy(q) values to plot.")
             return
-        self._set_plot_style()
-        plt.figure(figsize=(8, 5))
-        sns.barplot(x=self.categories, y=self.Fq_means, capsize=0.2, hue=self.categories,
-                    palette=['lightskyblue', 'limegreen', 'grey'], legend=False)
-        plt.errorbar(self.categories, self.Fq_means, yerr=self.Fq_stds,
-                     fmt='none', capsize=5, color='black')
-        plt.ylabel(r'Mean cross-fluctuation $\langle F_{xy}(q) \rangle$ $q \in [–5, 5]$', fontsize=15)
-        plt.title(r'MFDCCA mean cross-fluctuation $\langle F_{xy}(q) \rangle$', fontsize=20)
-        plt.gca().spines['top'].set_visible(False)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['left'].set_visible(False)
-        plt.gca().spines['bottom'].set_visible(False)
-        plt.tight_layout()
-        plt.show()
 
-    def plot_deltaAlpha(self):
+        self._set_plot_style()
+
+        created_fig = False
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            created_fig = True
+
+        sns.barplot(
+            x=self.categories,
+            y=self.Fq_means,
+            capsize=0.2,
+            hue=self.categories,
+            palette=['lightskyblue', 'limegreen', 'grey'],
+            legend=False,
+            ax=ax
+        )
+        ax.errorbar(
+            x=range(len(self.categories)),
+            y=self.Fq_means,
+            yerr=self.Fq_stds,
+            fmt='none',
+            capsize=5,
+            color='black'
+        )
+        ax.set_ylabel(r'Mean cross-fluctuation $\langle F_{xy}(q) \rangle$, $q \in [-5, 5]$')
+        ax.set_title(r'MFDCCA mean cross-fluctuation $\langle F_{xy}(q) \rangle$')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+
+    def plot_deltaAlpha(self, ax=None):
+        """Bar plot of the multifractal spectrum width Δα."""
         if not self.deltaAlpha_means:
             print("No Δα values to plot.")
             return
+
         self._set_plot_style()
-        plt.figure(figsize=(8, 5))
-        sns.barplot(x=self.categories, y=self.deltaAlpha_means, capsize=0.2, hue=self.categories,
-                    palette=['lightskyblue', 'limegreen', 'grey'], legend=False)
-        plt.errorbar(self.categories, self.deltaAlpha_means, yerr=self.deltaAlpha_stds,
-                     fmt='none', capsize=5, color='black')
-        plt.ylabel(r'Spectrum width ($\Delta\alpha$) $q \in [–5, 5]$', fontsize=15)
-        plt.title('MFDCCA spectrum width (Δα)', fontsize=20)
-        plt.gca().spines['top'].set_visible(False)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['left'].set_visible(False)
-        plt.gca().spines['bottom'].set_visible(False)
-        plt.tight_layout()
-        plt.show()
+
+        created_fig = False
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            created_fig = True
+
+        sns.barplot(
+            x=self.categories,
+            y=self.deltaAlpha_means,
+            capsize=0.2,
+            hue=self.categories,
+            palette=['lightskyblue', 'limegreen', 'grey'],
+            legend=False,
+            ax=ax
+        )
+        ax.errorbar(
+            x=range(len(self.categories)),
+            y=self.deltaAlpha_means,
+            yerr=self.deltaAlpha_stds,
+            fmt='none',
+            capsize=5,
+            color='black'
+        )
+        ax.set_ylabel(r'Spectrum width ($\Delta\alpha$), $q \in [-5, 5]$')
+        ax.set_title('MFDCCA spectrum width (Δα)')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
 
 
     # Helper methods
@@ -812,4 +930,3 @@ class ComplexityFidelity:
             print()
 
         return out
-
