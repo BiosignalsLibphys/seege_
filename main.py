@@ -46,11 +46,8 @@ if __name__ == '__main__':
     # Compute hjorth metrics
     #hjorth_dataset = sim.compute_hjorth_metrics(real_data, synthetic_data, verbose=True)
 
-    # Plot Hjorth parameter distributions
-    #hjorth_hist_dataset = sim.plot_hjorth_histograms(real_data, synthetic_data)
-
-    # Plot 3D Hjorth parameter scatter
-    #hjorth_3d_dataset = sim.plot_hjorth_3d(real_data, synthetic_data)
+    # Plot Hjorth metrics
+    #hjorth_hist_dataset = sim.plot_hjorth_metrics(real_data, synthetic_data)
 
     # Compute time fidelity score
     #evaluation_score.compute_time_fidelity_score(real_data, synthetic_data)
