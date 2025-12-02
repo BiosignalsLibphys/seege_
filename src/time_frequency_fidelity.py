@@ -809,37 +809,72 @@ class TimeFrequencyFidelity:
             vals = [d[key] for d in L if np.isfinite(d[key])]
             return np.array(vals, dtype=float) if len(vals) > 0 else np.array([], dtype=float)
 
-        keys = ["n_bursts", "rate_hz", "mean_duration_s", "median_duration_s",
-                "mean_peak_amp", "median_peak_amp", "mean_ibi_s", "median_ibi_s", "duty_cycle"]
+        keys = [
+            "n_bursts", "rate_hz", "mean_duration_s", "median_duration_s",
+            "mean_peak_amp", "median_peak_amp", "mean_ibi_s",
+            "median_ibi_s", "duty_cycle"
+        ]
 
-        # RS wasserstein
+        # Helper: z-score using pooled mean/std over real+synth
+        # WD<0.1SD almost identical dist; 0.1-0.3SD small shift;0.3-0.5SD moderate shift;0.5-0.7SD large shift; 0.7-1 SD very different
+        def _zscore_using_real(r, s):
+            std = np.std(r)
+            if std == 0 or not np.isfinite(std):
+                return np.zeros_like(r), np.zeros_like(s)
+
+            mean = np.mean(r)
+            r_z = (r - mean) / std
+            s_z = (s - mean) / std
+            return r_z, s_z
+
+        # Precompute WD and means
         wd_rs = {}
+        real_mean_feat = {}
+        synth_mean_feat = {}
+        n_real_feat = {}
+        n_synth_feat = {}
+
         for k in keys:
             r = _stack_feature(R_sum, k)
             s = _stack_feature(S_sum, k)
-            wd_rs[k] = float(WD(r, s)) if (r.size > 0 and s.size > 0) else np.nan
 
-        # RR/SS dispersion (mean absolute deviation proxy)
-        def _within_dispersion(L, key):
+            n_real_feat[k] = int(r.size)
+            n_synth_feat[k] = int(s.size)
+            real_mean_feat[k] = float(np.mean(r)) if r.size > 0 else np.nan
+            synth_mean_feat[k] = float(np.mean(s)) if s.size > 0 else np.nan
+
+            if r.size > 0 and s.size > 0:
+                # Normalization using real SD
+                real_std = np.std(r) + 1e-12
+                wd_rs[k] = float(WD(r, s) / real_std)
+
+            else:
+                wd_rs[k] = np.nan
+
+        # Robust SD (1.4826 * MAD) – using raw scale
+        def _robust_sd(L, key):
             vals = _stack_feature(L, key)
-            if vals.size <= 1:
+            if vals.size == 0:
                 return np.nan
-            m = np.mean(vals)
-            return float(np.mean(np.abs(vals - m)))
+            med = np.median(vals)
+            mad = np.median(np.abs(vals - med))
+            return float(1.4826 * mad)
 
-        wd_rr = {k: _within_dispersion(R_sum, k) for k in keys}
-        wd_ss = {k: _within_dispersion(S_sum, k) for k in keys}
+        rr_rsd = {k: _robust_sd(R_sum, k) for k in keys}
+        ss_rsd = {k: _robust_sd(S_sum, k) for k in keys}
 
         if verbose:
             def _fmt(x):
                 return "nan" if not np.isfinite(x) else f"{x:.3g}"
+
             print("\n=== Burst Statistics Summary ===")
             print(f"Band: {band[0]:.3g}–{band[1]:.3g} Hz | Threshold: {threshold}"
                   + (f" (p={p:.0f})" if threshold == "percentile" else f" (mean+{kappa or 1.5}·SD)")
                   + f" | min_dur={min_duration_ms} ms | merge_gap={merge_gap_ms} ms | smooth={smooth_ms} ms")
             print(f"N_real={len(R_sum)} | N_synth={len(S_sum)}\n")
 
-            header = f"{'Feature':<18}  {'RS WD':>10}  {'RR disp':>10}  {'SS disp':>10}"
+            header = (f"{'Feature':<18}  {'R_mean':>10}  {'S_mean':>10}  "
+                      f"{'RS WD(z)':>10}  {'RR rSD':>10}  {'SS rSD':>10}")
             print(header)
             print("-" * len(header))
             nice = {
@@ -854,7 +889,12 @@ class TimeFrequencyFidelity:
                 "duty_cycle": "duty_cycle"
             }
             for k in keys:
-                print(f"{nice[k]:<18}  {_fmt(wd_rs[k]):>10}  {_fmt(wd_rr[k]):>10}  {_fmt(wd_ss[k]):>10}")
+                print(f"{nice[k]:<18}  "
+                      f"{_fmt(real_mean_feat[k]):>10}  "
+                      f"{_fmt(synth_mean_feat[k]):>10}  "
+                      f"{_fmt(wd_rs[k]):>10}  "
+                      f"{_fmt(rr_rsd[k]):>10}  "
+                      f"{_fmt(ss_rsd[k]):>10}")
 
         return {
             "band": band,
@@ -866,7 +906,11 @@ class TimeFrequencyFidelity:
             "real_per_signal": R_sum,
             "synthetic_per_signal": S_sum,
             "RS_WD": wd_rs,
-            "RR_dispersion": wd_rr,
-            "SS_dispersion": wd_ss
+            "RR_robust_sd": rr_rsd,
+            "SS_robust_sd": ss_rsd,
+            "N_real_per_feature": n_real_feat,
+            "N_synth_per_feature": n_synth_feat,
+            "real_mean_per_feature": real_mean_feat,
+            "synth_mean_per_feature": synth_mean_feat,
         }
 
