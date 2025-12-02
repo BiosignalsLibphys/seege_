@@ -19,9 +19,10 @@ class Diversity:
        • Gaussian-weighted Outlier Goodness (synthetic → nearest real)
 
     2) Geometric (Structural) Diversity in low-dimensional embeddings
-       • Compactness (class-wise silhouette, PCA & UMAP) ∈ [0, 1]
+       • LabelMixingScore (class-wise silhouette, PCA & UMAP) ∈ [0, 1]
        • Mahalanobis-based Overlap (pooled-covariance; PCA & UMAP) ∈ (0, 1]
          (higher = closer centroids after normalizing by joint scatter)
+       • Covariance Shape Similarity (Frobenius-based; PCA & UMAP) ∈ [0, 1]
 
     3) Intrinsic (Sample-level) Diversity within the synthetic set
        • Uniqueness (mean nearest-neighbour distance ratio, syn/real)
@@ -63,62 +64,76 @@ class Diversity:
 
     # 1) Manifold Coverage: Coverage & Outlier Goodness (original space)
 
-    def compute_coverage_diversity(self, real_data: np.ndarray, synthetic_data: np.ndarray):
+    def compute_coverage_diversity(self, real_data: np.ndarray, synthetic_data: np.ndarray,
+                                   k_sigma: float = 2.0):
         """
         Compute manifold coverage metrics in the original feature space.
 
-        Metrics
-        -------
+        Metrics (threshold-based)
+        -------------------------
         Coverage : float in [0, 1]
-            Gaussian-weighted proximity of each real sample to its nearest synthetic neighbour.
-            Higher is better: 1.0 ≈ full coverage of real manifold.
+            Fraction of real samples whose nearest synthetic neighbour lies
+            within R = k_sigma * sigma.
+            Higher is better: 1.0 ≈ all real modes are covered by synthetic data.
+
         Outliers : float in [0, 1]
-            Gaussian-weighted proximity of each synthetic sample to its nearest real neighbour
-            (an “outlier-goodness” score). Higher is better: 1.0 ≈ few synthetic outliers.
+            Fraction of synthetic samples whose nearest real neighbour lies
+            within R = k_sigma * sigma.
+            Higher is better: 1.0 ≈ few synthetic samples lie far from the
+            real manifold.
 
         Notes
         -----
-        We use a data-driven bandwidth σ = median(non-zero pairwise real-real distances),
-        and weight nearest-neighbour distances d via w = exp(−d² / (2σ²)).
+        - sigma is a data-driven scale estimated from real–real nearest-neighbour
+          distances (NOT all pairwise distances).
+        - k_sigma controls how strict the notion of “near” is (default = 2.0).
 
         Returns
         -------
         dict with keys:
-            'Coverage', 'Outliers', 'Sigma'
+            'Coverage', 'Outliers', 'Sigma', 'Radius'
         """
-        real = np.asarray(real_data)
-        synth = np.asarray(synthetic_data)
+        real = np.asarray(real_data, dtype=float)
+        synth = np.asarray(synthetic_data, dtype=float)
 
         # Pairwise distances
-        D_rs = pairwise_distances(real, synth, metric="euclidean")
-        D_rr = pairwise_distances(real, metric="euclidean")
+        D_rs = pairwise_distances(real, synth, metric="euclidean")  # real x synth
+        D_rr = pairwise_distances(real, real, metric="euclidean")  # real x real
 
-        # Bandwidth σ from real-real distances (non-zero median)
-        nz = D_rr[D_rr > 0]
-        sigma = float(np.median(nz)) if nz.size else 1.0
+        # --- 1) Bandwidth sigma from *nearest-neighbour* real-real distances ---
+        # Ignore self-distances by setting diagonal to +inf, then take row-wise min
+        np.fill_diagonal(D_rr, np.inf)
+        nn_real = D_rr.min(axis=1)  # nearest neighbour distance for each real point
+
+        # Robust scale: median NN distance (guard against pathological cases)
+        sigma = float(np.median(nn_real)) if nn_real.size else 1.0
         eps = 1e-12
         sigma = max(sigma, eps)
 
-        # Coverage: real → nearest synthetic
-        min_r2s = D_rs.min(axis=1)
-        coverage = float(np.mean(np.exp(-(min_r2s ** 2) / (2 * sigma ** 2))))
+        # Define radius R = k_sigma * sigma
+        R = k_sigma * sigma
 
-        # Outlier Goodness: synthetic → nearest real
-        min_s2r = D_rs.min(axis=0)
-        outliers = float(np.mean(np.exp(-(min_s2r ** 2) / (2 * sigma ** 2))))
+        # --- 2) Coverage: real -> synthetic ---
+        min_r2s = D_rs.min(axis=1)  # NN distance real -> synthetic
+        coverage = float(np.mean(min_r2s <= R))  # fraction within radius
 
-        print(f"[Manifold Coverage] Sigma: {sigma:.4f}")
-        print(f"[Manifold Coverage] Coverage (real→synth): {coverage:.3f}  (↑ better)")
-        print(f"[Manifold Coverage] Outlier Goodness (synth→real): {outliers:.3f}  (↑ better)")
+        # --- 3) Outlier "goodness": synthetic -> real ---
+        min_s2r = D_rs.min(axis=0)  # NN distance synthetic -> real
+        outliers = float(np.mean(min_s2r <= R))  # fraction within radius
+
+        print(f"[Coverage Diversity] sigma (NN): {sigma:.4f}")
+        print(f"[Coverage Diversity] Radius R = k_sigma * sigma = {R:.4f} (k_sigma={k_sigma})")
+        print(f"[Coverage Diversity] Coverage (real→synth): {coverage:.3f}  (↑ better)")
+        print(f"[Coverage Diversity] Outlier Goodness (synth→real): {outliers:.3f}  (↑ better)")
 
         return {
             "Coverage": coverage,
             "Outliers": outliers,
             "Sigma": sigma,
+            "Radius": R,
         }
 
-
-    # 2) Geometric Diversity: Compactness & Separation in PCA/UMAP spaces
+    # 2) Geometric Diversity: Label Mixing Score, overlap and covariance shape in PCA/UMAP spaces
 
     def compute_geometric_diversity(self, real_data: np.ndarray, synthetic_data: np.ndarray):
         """
@@ -126,20 +141,29 @@ class Diversity:
 
         Metrics
         -------
-        PCA_Compactness, UMAP_Compactness : float in [0, 1]
-            Rescaled class-wise silhouette (per class in {real, synthetic}, averaged and mapped from [−1, 1] → [0, 1]).
-            Higher ≈ tighter class cohesion while respecting separation from the other class.
+        PCA_LabelMixingScore, UMAP_LabelMixingScore : float in [0, 1]
+            1 - |mean silhouette per label|, where silhouette is computed using
+            labels {real, synthetic}. Values close to 1 mean that real and
+            synthetic are well mixed (indistinguishable by label); values near 0
+            mean they form clearly separated clusters.
+
         PCA_OverlapMahalanobis, UMAP_OverlapMahalanobis : float in (0, 1]
-            Mahalanobis-based overlap using pooled covariance (higher = closer,
-            indicating synthetic samples follow the real manifold geometry).
+            Mahalanobis-based overlap using pooled covariance (higher = closer
+            centroids after normalizing by joint scatter).
+
+        PCA_CovShape, UMAP_CovShape : float in [0, 1]
+            Similarity of covariance structure between real and synthetic:
+            1 - ||Σ_real - Σ_syn||_F / (||Σ_real||_F + ||Σ_syn||_F).
+            Values close to 1 mean similar shape/anisotropy; values near 0 mean
+            strong mismatch in spread/shape.
 
         Returns
         -------
         dict with keys:
             'PCA_Embedding', 'UMAP_Embedding',
-            'PCA_Compactness', 'UMAP_Compactness',
-            'PCA_OverlapMahalanobis', 'UMAP_OverlapMahalanobis'
-
+            'PCA_LabelMixingScore', 'UMAP_LabelMixingScore',
+            'PCA_OverlapMahalanobis', 'UMAP_OverlapMahalanobis',
+            'PCA_CovShape', 'UMAP_CovShape'
         """
         real = np.asarray(real_data)
         synth = np.asarray(synthetic_data)
@@ -149,8 +173,10 @@ class Diversity:
         labels = np.array([0] * n_real + [1] * n_syn)
         eps = 1e-12
 
-        # PCA
-        pca = PCA(n_components=self.n_components, svd_solver='randomized', random_state=self.random_state)
+        # ---------------- PCA ----------------
+        pca = PCA(n_components=self.n_components,
+                  svd_solver='randomized',
+                  random_state=self.random_state)
         pca_emb = pca.fit_transform(combined)
 
         mu_r = pca_emb[:n_real].mean(axis=0)
@@ -163,14 +189,22 @@ class Diversity:
         Ss = np.cov(Xs.T)
         Sp = Sr + Ss + 1e-6 * np.eye(Sr.shape[0])
 
+        # Mahalanobis centroid overlap
         delta_vec = (mu_r - mu_s).reshape(-1, 1)
         d2_pca = float((delta_vec.T @ np.linalg.inv(Sp) @ delta_vec).squeeze())
         pca_overlap_maha = float(np.exp(-0.5 * d2_pca))
 
+        # Label mixing score (label mixing)
         s_pca = silhouette_samples(pca_emb, labels)
-        pca_compact = float(((s_pca[:n_real].mean() + s_pca[n_real:].mean()) / 2.0 + 1.0) / 2.0)
+        mean_s_pca = 0.5 * (s_pca[:n_real].mean() + s_pca[n_real:].mean())
+        pca_labelmixingscore = float(1.0 - abs(mean_s_pca))  # already in [0, 1]
 
-        # UMAP
+        # Covariance shape similarity (Frobenius-based)
+        num_pca = np.linalg.norm(Sr - Ss, ord="fro")
+        den_pca = np.linalg.norm(Sr, ord="fro") + np.linalg.norm(Ss, ord="fro") + eps
+        pca_covshape = float(np.clip(1.0 - num_pca / den_pca, 0.0, 1.0))
+
+        # ---------------- UMAP ----------------
         umap_emb = UMAP(
             n_components=self.n_components,
             n_neighbors=self.n_neighbors,
@@ -188,27 +222,38 @@ class Diversity:
         Ss_u = np.cov(Xs_u.T)
         Sp_u = Sr_u + Ss_u + 1e-6 * np.eye(Sr_u.shape[0])
 
+        # Mahalanobis centroid overlap (UMAP)
         delta_vec_u = (mu_r_u - mu_s_u).reshape(-1, 1)
         d2_umap = float((delta_vec_u.T @ np.linalg.inv(Sp_u) @ delta_vec_u).squeeze())
         umap_overlap_maha = float(np.exp(-0.5 * d2_umap))
 
+        # Label mixing score (UMAP)
         s_umap = silhouette_samples(umap_emb, labels)
-        umap_compact = float(((s_umap[:n_real].mean() + s_umap[n_real:].mean()) / 2.0 + 1.0) / 2.0)
+        mean_s_umap = 0.5 * (s_umap[:n_real].mean() + s_umap[n_real:].mean())
+        umap_labelmixingscore = float(1.0 - abs(mean_s_umap))
 
-        print("[Geometric Diversity] PCA  -> Compactness:", f"{pca_compact:.3f}",
-              "| Mahalanobis Overlap:", f"{pca_overlap_maha:.3f}")
-        print("[Geometric Diversity] UMAP -> Compactness:", f"{umap_compact:.3f}",
-              "| Mahalanobis Overlap:", f"{umap_overlap_maha:.3f}")
+        # Covariance shape similarity (UMAP)
+        num_umap = np.linalg.norm(Sr_u - Ss_u, ord="fro")
+        den_umap = np.linalg.norm(Sr_u, ord="fro") + np.linalg.norm(Ss_u, ord="fro") + eps
+        umap_covshape = float(np.clip(1.0 - num_umap / den_umap, 0.0, 1.0))
+
+        print("[Geometric Diversity] PCA  -> Label Mixing Score:", f"{pca_labelmixingscore:.3f}",
+              "| Mahalanobis Overlap:", f"{pca_overlap_maha:.3f}",
+              "| CovShape:", f"{pca_covshape:.3f}")
+        print("[Geometric Diversity] UMAP -> Label Mixing Score:", f"{umap_labelmixingscore:.3f}",
+              "| Mahalanobis Overlap:", f"{umap_overlap_maha:.3f}",
+              "| CovShape:", f"{umap_covshape:.3f}")
 
         return {
             "PCA_Embedding": pca_emb,
             "UMAP_Embedding": umap_emb,
-            "PCA_Compactness": pca_compact,
-            "UMAP_Compactness": umap_compact,
+            "PCA_LabelMixingScore": pca_labelmixingscore,
+            "UMAP_LabelMixingScore": umap_labelmixingscore,
             "PCA_OverlapMahalanobis": pca_overlap_maha,
             "UMAP_OverlapMahalanobis": umap_overlap_maha,
+            "PCA_CovShape": pca_covshape,
+            "UMAP_CovShape": umap_covshape,
         }
-
 
     # 3) Intrinsic Diversity: Uniqueness & Local/Global Diversity (syn/real)
 
@@ -315,9 +360,9 @@ class Diversity:
         print("[Intrinsic Diversity] Uniqueness (NN ratio, syn/real): "
               f"{uniqueness_nn:.3f}  (~1 ideal; <1 collapse; >1 over-dispersion)")
         print("[Intrinsic Diversity] Global Diversity (pairwise ratio, syn/real): "
-              f"{global_div:.3f}")
-        print("[Intrinsic Diversity] Local Diversity P10 / P50 (NN ratio): "
-              f"{local_div_p10:.3f} / {local_div_p50:.3f}")
+              f"{global_div:.3f} (~1 ideal; <1 collapse; >1 over-dispersion)")
+        print("[Intrinsic Diversity] Local Diversity P10/P50 (NN ratio): "
+              f"{local_div_p10:.3f} / {local_div_p50:.3f} (~1 ideal; <1 collapse; >1 over-dispersion)")
 
         return {
             "Uniqueness_NN": uniqueness_nn,
@@ -330,7 +375,7 @@ class Diversity:
     # 4) Plotting: same as before (expects *_Embedding in results dict)
 
     @staticmethod
-    def plot_embeddings(projection_name: str, geom: dict, save: str = None):
+    def plot_embeddings(projection_name: str, geom: dict, save: str = None, plot_title: str = None):
         """
         Plot a 2D projection of real vs synthetic data using PCA or UMAP.
 
@@ -376,14 +421,15 @@ class Diversity:
         df = pd.DataFrame(emb, columns=['dim1', 'dim2'])
         df['Type'] = labels
 
-        fig, ax = plt.subplots(figsize=(6, 5))
+        fig, ax = plt.subplots(figsize=(5, 4))
         sns.scatterplot(
             data=df, x='dim1', y='dim2', hue='Type',
             palette={'Real': 'limegreen', 'Synthetic': 'lightskyblue'},
             edgecolor='black', s=80, alpha=0.8, legend=True, ax=ax
         )
 
-        ax.set_title(title, fontsize=20)
+        final_title = plot_title if plot_title is not None else title
+        ax.set_title(final_title)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_xlabel('')
@@ -402,4 +448,3 @@ class Diversity:
 
         plt.show()
         return fig
-
