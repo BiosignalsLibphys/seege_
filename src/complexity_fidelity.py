@@ -868,18 +868,63 @@ class ComplexityFidelity:
         se_R, pe_R, lz_R = _features(R)
         se_S, pe_S, lz_S = _features(S)
 
+        # Helper to compute raw + real-SD-normalized WD
+        def _wd_with_real_norm(real_vals, synth_vals, *, allow_inf=False):
+            """
+            real_vals, synth_vals: 1D arrays (may contain nan/inf).
+            allow_inf: if True, keep inf as invalid but treat them like nan in masking.
+            Returns (WD_raw, WD_norm) where WD_norm = WD_raw / std(real_valid).
+            """
+            if allow_inf:
+                mask_r = np.isfinite(real_vals)
+                mask_s = np.isfinite(synth_vals)
+            else:
+                mask_r = ~np.isnan(real_vals)
+                mask_s = ~np.isnan(synth_vals)
+
+            r = real_vals[mask_r]
+            s = synth_vals[mask_s]
+
+            if r.size == 0 or s.size == 0:
+                return np.nan, np.nan
+
+            # Raw WD
+            WD_raw = wasserstein_distance(r, s)
+
+            # Normalize by real SD
+            sd_real = np.std(r)
+            if sd_real == 0 or not np.isfinite(sd_real):
+                WD_norm = np.nan
+            else:
+                WD_norm = WD_raw / sd_real
+
+            return float(WD_raw), float(WD_norm)
+
+        # SampEn: may contain inf -> use isfinite mask
+        WD_SampEn_raw, WD_SampEn_norm = _wd_with_real_norm(se_R, se_S, allow_inf=True)
+        # PermEn: typically finite in [0,1], just drop nan
+        WD_PermEn_raw, WD_PermEn_norm = _wd_with_real_norm(pe_R, pe_S, allow_inf=False)
+        # LZC: finite, just drop nan
+        WD_LZC_raw, WD_LZC_norm = _wd_with_real_norm(lz_R, lz_S, allow_inf=False)
+
         out = {
-            "WD_SampEn": float(wasserstein_distance(se_R[~np.isinf(se_R) & ~np.isnan(se_R)],
-                                                    se_S[~np.isinf(se_S) & ~np.isnan(se_S)])) if np.isfinite(
-                se_R).any() and np.isfinite(
-                se_S).any() else np.nan,
-            "WD_PermEn": float(wasserstein_distance(pe_R[~np.isnan(pe_R)], pe_S[~np.isnan(pe_S)])) if np.isfinite(
-                pe_R).any() and np.isfinite(pe_S).any() else np.nan,
-            "WD_LZC": float(wasserstein_distance(lz_R[~np.isnan(lz_R)], lz_S[~np.isnan(lz_S)])) if np.isfinite(
-                lz_R).any() and np.isfinite(lz_S).any() else np.nan,
-            "Real_SampEn_mean": float(np.nanmean(se_R)), "Synth_SampEn_mean": float(np.nanmean(se_S)),
-            "Real_PermEn_mean": float(np.nanmean(pe_R)), "Synth_PermEn_mean": float(np.nanmean(pe_S)),
-            "Real_LZC_mean": float(np.nanmean(lz_R)), "Synth_LZC_mean": float(np.nanmean(lz_S)),
+            # Raw WD (original behaviour)
+            "WD_SampEn": WD_SampEn_raw,
+            "WD_PermEn": WD_PermEn_raw,
+            "WD_LZC": WD_LZC_raw,
+
+            # WD normalized by real SD (effect-size-like)
+            "WD_SampEn_norm": WD_SampEn_norm,
+            "WD_PermEn_norm": WD_PermEn_norm,
+            "WD_LZC_norm": WD_LZC_norm,
+
+            # Means
+            "Real_SampEn_mean": float(np.nanmean(se_R)),
+            "Synth_SampEn_mean": float(np.nanmean(se_S)),
+            "Real_PermEn_mean": float(np.nanmean(pe_R)),
+            "Synth_PermEn_mean": float(np.nanmean(pe_S)),
+            "Real_LZC_mean": float(np.nanmean(lz_R)),
+            "Synth_LZC_mean": float(np.nanmean(lz_S)),
         }
 
         # Optional surrogate nonlinearity check (z-score of real vs surrogate)
@@ -887,7 +932,7 @@ class ComplexityFidelity:
             rng = np.random.default_rng(0)
 
             def _nz(arr, func):
-                # per-signal z-scores relative to its own surrogates
+                # Per-signal z-scores relative to its own surrogates
                 zs = []
                 for sig in arr:
                     vals = []
@@ -913,10 +958,10 @@ class ComplexityFidelity:
                 return "nan" if not np.isfinite(x) else f"{x:.4g}"
 
             print("=== Entropy metrics ===")
-            print("Wasserstein Distances (lower = more similar):")
-            print(f"  SampEn WD: {_fmt(out['WD_SampEn'])}")
-            print(f"  PermEn WD: {_fmt(out['WD_PermEn'])}")
-            print(f"  LZC   WD: {_fmt(out['WD_LZC'])}")
+            print("Wasserstein Distances Normalized (lower = more similar):")
+            print(f"  SampEn WD: {_fmt(out['WD_SampEn_norm'])}")
+            print(f"  PermEn WD: {_fmt(out['WD_PermEn_norm'])}")
+            print(f"  LZC   WD: {_fmt(out['WD_LZC_norm'])}")
             print("Means (Real vs Synthetic):")
             print(f"  SampEn: {_fmt(out['Real_SampEn_mean'])} vs {_fmt(out['Synth_SampEn_mean'])}")
             print(f"  PermEn: {_fmt(out['Real_PermEn_mean'])} vs {_fmt(out['Synth_PermEn_mean'])}")
