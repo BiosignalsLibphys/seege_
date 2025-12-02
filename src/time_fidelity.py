@@ -5,6 +5,7 @@ from numpy.linalg import inv
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
+from scipy.stats import chi2
 
 # Set Arial font globally
 mpl.rcParams['font.family'] = 'Arial'
@@ -16,6 +17,10 @@ class TimeFidelity:
     Implemented Metrics
     -------------------
     1. Hjorth Parameters (Activity, Mobility, Complexity)
+    2. Wasserstein Distance for each Hjorth parameter
+        - Wasserstein Distance normalized by real-data standard deviation
+        - Average Wasserstein Distance
+    3. Mahalanobis Distance in Hjorth parameter space
 
     Example usage:
     --------------
@@ -71,9 +76,26 @@ class TimeFidelity:
         ]
         ws_hjorth_avg = np.mean(ws_hjorth_all)
 
+        # Normalize per parameter using real-data scale before combining.
+        #~0.1 SD → essentially identical; ~0.5 SD → small difference; ~1 SD → moderate difference; 1.5–2 SD → large difference
+        real_std = real_hjorth.std(axis=0)  # shape (3,)
+
+        ws_hjorth_std_norm = [
+            ws_hjorth_all[i] / (real_std[i] + 1e-9)
+            for i in range(3)
+        ]
+        ws_hjorth_effective_avg = np.mean(ws_hjorth_std_norm)
+
         cov = np.cov(np.vstack((real_hjorth, syn_hjorth)).T)
         inv_cov = inv(cov + np.eye(cov.shape[0]) * 1e-6)
         hjorth_mahalanobis = mahalanobis(real_mean, syn_mean, inv_cov)
+
+        # Compute p-value from Mahalanobis distance
+        md2 = hjorth_mahalanobis ** 2
+        p_value = 1.0 - chi2.cdf(md2, df=3)
+
+        # Compute Hjorth parameters relative differences
+        rel_diff = (syn_mean - real_mean) / (real_mean + 1e-9)
 
         if verbose:
             print("=== Mean Hjorth Parameters ===")
@@ -83,15 +105,24 @@ class TimeFidelity:
                 f"Synthetic Signals: Activity={syn_mean[0]:.4f}, Mobility={syn_mean[1]:.4f}, Complexity={syn_mean[2]:.4f}")
             print("=== Hjorth Parameters Summary ===")
             for i, label in enumerate(["Activity", "Mobility", "Complexity"]):
-                print(f"{label} - Wasserstein Distance: {ws_hjorth_all[i]:.4f}")
+                print(f"{label} - Wasserstein Distance (R-S): {ws_hjorth_all[i]:.4f}")
+            for i, label in enumerate(["Activity", "Mobility", "Complexity"]):
+                print(f"{label} - Wasserstein Distance Normalized (R-S): {ws_hjorth_std_norm[i]:.4f}")
+            for name, rd in zip(["Activity", "Mobility", "Complexity"], rel_diff):
+                print(f"{name} mean relative diff: {rd * 100:.1f}% (synthetic vs real)")
+            print(f"Average Wasserstein Distance Normalized: {ws_hjorth_effective_avg:.4f}")
             print(f"Average Wasserstein Distance: {ws_hjorth_avg:.4f}")
-            print(f"Mahalanobis Distance: {hjorth_mahalanobis:.4f}\n")
+            print(f"Mahalanobis Distance: {hjorth_mahalanobis:.4f} Approx. p-value (χ², df=3): {p_value:.4f}\n")
 
         return {
             "Avg_WD": ws_hjorth_avg,
+            "Avg_WD_normSD": ws_hjorth_effective_avg,
             "WD_Activity": ws_hjorth_all[0],
             "WD_Mobility": ws_hjorth_all[1],
             "WD_Complexity": ws_hjorth_all[2],
+            "WD_Activity_normSD": ws_hjorth_std_norm[0],
+            "WD_Mobility_normSD": ws_hjorth_std_norm[1],
+            "WD_Complexity_normSD": ws_hjorth_std_norm[2],
             "Mahalanobis": hjorth_mahalanobis,
             "Real_Activity": real_mean[0],
             "Real_Mobility": real_mean[1],
@@ -146,7 +177,7 @@ class TimeFidelity:
             if i == 0:  # legend only on first histogram to avoid repetition
                 ax.legend(fontsize=12)
 
-        # 3D scatter on bottom-right subplot 
+        # 3D scatter on bottom-right subplot
         ax3d = fig.add_subplot(2, 2, 4, projection="3d")
 
         ax3d.scatter(
@@ -166,3 +197,4 @@ class TimeFidelity:
 
         plt.tight_layout()
         plt.show()
+
