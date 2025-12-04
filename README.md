@@ -1,5 +1,5 @@
 
-<img src="seege_logo.png" width="700">
+<img src="seege_logo.png" width="400">
 
 
 
