@@ -1,4 +1,7 @@
-# seege_
+
+<img src="logo.png" width="400">
+
+
 
 A Python-based framework for evaluating synthetic EEG signals along three dimensions: fidelity, diversity, and privacy.
 
