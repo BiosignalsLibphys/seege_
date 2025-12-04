@@ -3,11 +3,11 @@ import pickle
 from itertools import product
 
 from preprocessing import *
-from amplitude_similarity import *
-from frequency_similarity import *
-from scalogram_similarity import *
-from fractal_similarity import *
-from time_similarity import *
+from amplitude_fidelity import *
+from time_fidelity import *
+from frequency_fidelity import *
+from time_frequency_fidelity import *
+from complexity_fidelity import *
 from diversity import *
 from privacy import *
 import evaluation_score
