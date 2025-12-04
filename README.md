@@ -86,13 +86,13 @@ score = compute_diversity_score(real_data, synthetic_data)
 ## Typical workflow
 1. Preprocess data (filtering, normalization) so real and synthetic have the same conventions.
 2. Compute metrics:
-   - Diversity (dataset variability)
    - Fidelity (signal realism/quality)
+   - Diversity (dataset variability)
    - Privacy (leakage/identifiability)
 3. Aggregate scores and compare across models/datasets.
 
 ## License
-PolyForm Noncommercial 1.0.0 © 2025 Inês A. P. Silveira
+CC-BY-SA-4.0
 
 ## Citation
 If you seege_ in your work , please cite it as follows:
@@ -100,7 +100,7 @@ If you seege_ in your work , please cite it as follows:
 ```bibtex
 @software{seege_2025,
   title        = {seege_: a Python library for synthetic EEG evaluation},
-  author       = {Silveira, Inês A. P.},
+  author       = {Silveira, Inês and Silva, Luís and Gamboa, Hugo.},
   year         = {2025},
   url          = {https://github.com/BiosignalsLibphys/seege_},
   version      = {0.1.0},
