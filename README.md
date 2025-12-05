@@ -97,7 +97,7 @@ If you seege_ in your work , please cite it as follows:
   year         = {2025},
   url          = {https://github.com/BiosignalsLibphys/seege_},
   version      = {0.1.0},
-  note         = {License: PolyForm Noncommercial 1.0.0}
+  note         = {License: MIT}
 }
 
 
