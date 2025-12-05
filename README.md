@@ -2,7 +2,7 @@
 
 A Python-based framework for evaluating synthetic EEG signals along three dimensions: fidelity, diversity, and privacy.
 
-### Contents
+## Contents
 - Test EEG datasets (real and synthetic)
 - Evaluation metrics & scores
 - Metrics validation
