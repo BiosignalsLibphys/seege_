@@ -45,13 +45,9 @@ seege/                       # Your root project folder
 - Diversity
 - Privacy
 
-## Prerequisites
-- Python 3.10+
-- macOS (tested), Linux/Windows should work
-- `pip` and a virtual environment tool
-
 ## Installation
-Clone the repo and install dependencies in a virtual environment:
+
+seege_ requires Python 3.10+. To install, clone the repo and install dependencies in a virtual environment:
 ```bash
 git clone https://github.com/BiosignalsLibphys/seege_.git
 cd seege_
