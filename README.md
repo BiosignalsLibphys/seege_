@@ -2,48 +2,12 @@
 
 A Python-based framework for evaluating synthetic EEG signals along three dimensions: fidelity, diversity, and privacy.
 
-<pre> 
-
-seege/                       # Your root project folder
-│
-├── data/                          # Datasets
-│   ├── real_dataset_10.pkl        # 10 real signals
-│   ├── synthetic_dataset_10.pkl   # 10 synthetic signal
-│
-├── src/                     # Source code
-│   ├── __init__.py          # (optional) Make it a package if needed
-│
-│   ├── preprocessing.py          # Data loading and preprocessing utilities
-│   ├── amplitude_fidelity.py   # Amplitude similiarity metrics
-│   ├── time_fidelity.py        # Time domain similarity metrics (Hjorth parameters)
-│   ├── frequency_fidelity.py   # Frequency domain similarity metrics
-│   ├── time_frequency_fidelity.py   #  Time-frequency domain similarity metrics
-│   ├── complexity_fidelity.py     # Complexity domain similarity metrics (fractality and entropy metrics)
-│   ├── diversity.py              #  Diversity evaluation metrics
-│   ├── privacy.py                # Privacy evaluation metrics
-│   ├── evaluation_score.py       #  Evaluation scores estimation for all domains and sub-domains
-│
-│   └── validation/          # Metrics validation scripts
-│       ├── amplitude_validation.py
-│       ├── time_validation.py
-│       ├── frequency_validation.py
-│       ├── time_frequency_validation.py
-│       ├── complexity_validation.py
-│       ├── diversity_validation.py
-│       └── privacy_validation.py
-│
-├── main.py                 # Main execution script to run evaluations
-├── README.md               # Project overview & usage
-├── requirements.txt        # Dependencies
-├── setup.py                # Installation/config (if packaging)
-└── venv/                   # Local environment (ignored in version control)
-
-</pre>
-
-## Evaluation dimensions
-- Fidelity
-- Diversity
-- Privacy
+## Contents
+- Test EEG datasets (real and synthetic)
+- Evaluation metrics & scores
+- Metrics validation
+- Usage examples
+- Support material
 
 ## Installation
 
@@ -79,7 +43,7 @@ Scientific data 7 (1) (2020) 179. doi:https://doi.org/10.1038/s41597-020-0532-5
 ## Usage example
 Please see our notebook usage_example.
 
-## Typical workflow
+Typical workflow
 1. Preprocess data (filtering, normalization) so real and synthetic have the same conventions.
 2. Compute metrics:
    - Fidelity (signal realism/quality)
