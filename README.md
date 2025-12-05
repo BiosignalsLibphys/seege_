@@ -70,18 +70,12 @@ The library expects EEG samples in simple Python containers:
 
 You can adapt loaders to your own files (`.npy`, `.pkl`, etc.).
 
+## References
+
+Real data segments were retrieved from [mayo dataset] (https://springernature.figshare.com/collections/Multicenter_intracranial_EEG_dataset_for_classification_of_graphoelements_and_artifactual_signals/4681208/1).
+
 ## Usage example
-```python
-import numpy as np
-
-# Generate data: 10 real and 10 synthetic epochs, 1 channel × 1024 samples
-real_data = [np.random.randn(1, 1024) for _ in range(10)]
-synthetic_data = [np.random.randn(1, 1024) for _ in range(10)]
-
-# Calculate diversity score
-from src.evaluation_score import compute_diversity_score  # adjust to your API
-score = compute_diversity_score(real_data, synthetic_data)
-```
+Please see our notebook usage_example.
 
 ## Typical workflow
 1. Preprocess data (filtering, normalization) so real and synthetic have the same conventions.
