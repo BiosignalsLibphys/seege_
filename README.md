@@ -91,9 +91,6 @@ Please see our notebook usage_example.
    - Privacy (leakage/identifiability)
 3. Aggregate scores and compare across models/datasets.
 
-## License
-CC-BY-SA-4.0
-
 ## Citation
 If you seege_ in your work , please cite it as follows:
 
