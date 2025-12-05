@@ -72,7 +72,7 @@ You can adapt loaders to your own files (`.npy`, `.pkl`, etc.).
 
 ## References
 
-Real data segments were retrieved from [mayo dataset] (https://springernature.figshare.com/collections/Multicenter_intracranial_EEG_dataset_for_classification_of_graphoelements_and_artifactual_signals/4681208/1).
+##### Real data segments were retrieved from [mayo dataset] (https://springernature.figshare.com/collections/Multicenter_intracranial_EEG_dataset_for_classification_of_graphoelements_and_artifactual_signals/4681208/1).
 
 ## Usage example
 Please see our notebook usage_example.
