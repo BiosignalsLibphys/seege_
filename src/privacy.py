@@ -1,223 +1,542 @@
 import numpy as np
-from typing import Literal, Callable, List, Dict
+from typing import Callable, List
 from scipy.spatial.distance import euclidean
-from scipy.stats import wasserstein_distance
-from scipy.spatial.distance import jensenshannon
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, accuracy_score
-import math
-import warnings
+
 
 ArrayLike = np.ndarray | list
 
 
 class Privacy:
     """
-    A class for evaluating the privacy of synthetic data using two types of metrics:
+    A class for evaluating the privacy of synthetic data using:
 
-    1. Distance Metrics – measure how similar the distributions of real and synthetic signals are:
-       - Wasserstein Distance (WD)
-       - Euclidean Distance (ED)
-       - Jensen-Shannon Divergence (JSD)
+    1. Nearest-neighbour signal distances:
+       - Euclidean distance (L2)
+       - Cosine distance (1 − cosine similarity)
+       - Dynamic Time Warping (DTW) distance
 
-       These metrics are computed using histograms and the minimum distance between real and synthetic samples.
+       For each real signal, the closest synthetic signal is found according to
+       each metric, and the average of these per-real minima is reported.
 
-    2. Membership Inference Risk (MIR) – estimates the risk of identifying real training records based on:
+       Distances can be computed:
+       - on raw signals (normalize=None)
+       - after global z-score with respect to REAL data ("zscore_global")
+       - after per-signal z-score ("zscore_per_signal")
+
+        1.1. Distance effect sizes (Cohen-style):
+        Compare how close synthetic samples are to real data (R–S NN distances)
+        relative to how close real samples are to each other (R–R NN distances).
+
+    2. Membership Inference Risk (MIR) – estimates the risk of identifying
+       real training records based on:
        - Prediction confidence
        - Entropy
        - Modified entropy
        - Correctness
 
-       MIR is evaluated using black-box benchmark methods (recommended) or an optional legacy attack model.
-
-    Parameters:
-    -----------
-    num_bins : int
-        Number of histogram bins (default: 30)
-    range_bins : tuple
-        Value range for histograms (default: (0, 1))
+     ⚠ MIR REQUIRES TRUE LABELS (y_real)
+       -----------------------------------
+       MIR is defined with respect to a supervised classifier trained on REAL data.
+       Therefore, `compute_mir_metrics` needs the TRUE labels of the real signals
+       (y_real). These must be the actual task labels used to train a meaningful
+       model (e.g., pathology vs physiology, noise vs clean, etc.).
 
     Example Usage:
     --------------
-    real_data = [np.random.rand(1000) for _ in range(5)]  # Simulated real samples
-    synthetic_data = [np.random.rand(1000) for _ in range(5)]  # Simulated synthetic samples
+    real_data = [np.random.rand(1000) for _ in range(5)] # Simulated real samples
+    synthetic_data = [np.random.rand(1000) for _ in range(5)] # Simulated synthetic samples
 
     privacy_evaluator = Privacy()
 
-    # Compute distance and MIR metrics
+    # NN distances (signal-level)
     distance_metrics = privacy_evaluator.compute_distance_metrics(real_data, synthetic_data)
-    mir = privacy_evaluator.compute_mir(real_data, synthetic_data)
+
+    # MIR (model-level) – you provide labels for real signals
+    y_real = np.array([...]) # true labels (e.g., pathology vs physiology)
+    mir_metrics = privacy.compute_mir_metrics(real_signals, synthetic_signals, y_real)
 
     References:
     ----------
-    [1] https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=10568134
-    [2] https://www.semanticscholar.org/reader/190169b88f0803e2a6eeb311703ea421461cf3fe
-    [3] https://arxiv.org/abs/2404.06787?utm_source=chatgpt.com
-    [4] https://github.com/inspire-group/membership-inference-evaluation/tree/master
-    [5] https://arxiv.org/abs/2003.10595
+    [1] https://github.com/inspire-group/membership-inference-evaluation/tree/master
+    [2] https://arxiv.org/abs/2003.10595
     """
 
-    def __init__(self, num_bins: int = 30, range_bins: tuple = (0, 1)):
-        """
-        Initializes the Privacy class with parameters for histogram-based distance computations.
-
-        Parameters:
-        ----------
-        num_bins : int, optional
-            The number of bins used to construct histograms for metric computation (default is 30).
-        range_bins : tuple, optional
-            The range of bin edges for histogram construction, specified as (min, max) (default is (0,1)).
-        """
-        self.num_bins = num_bins
-        self.range_bins = range_bins
+    def __init__(self):
         self.target_model = RandomForestClassifier(n_estimators=100, random_state=42)
         self.attack_model = RandomForestClassifier(n_estimators=100, random_state=0)
 
-    # Generic helper -------------------------------------------------------
+    # Normalisation helpers
 
-    def compute_distance_metric(self,
-                                 real_data: ArrayLike,
-                                 synthetic_data: ArrayLike,
-                                 metric_function: Callable[[np.ndarray, np.ndarray], float]):
+    def _normalize_signals(
+        self,
+        real_data: ArrayLike,
+        synthetic_data: ArrayLike,
+        mode: str | None = None,
+    ):
         """
-        Generalised routine to compute a statistical distance metric using the **per‑real‑record
-        minimum** approach.
-
-        For every real sample we locate the **closest** synthetic sample (according to
-        *metric_function*) and then average those minima.  This mirrors the intuition
-        "Does *every* real record have at least one convincing synthetic counterpart?".
+        Normalize real and synthetic signals according to `mode`.
 
         Parameters
         ----------
-        real_data : list[np.ndarray]
-            Collection of *N* real signals.
-        synthetic_data : list[np.ndarray]
-            Collection of *M* synthetic signals.
-        metric_function : Callable
-            Function that computes the distance between two *flattened* signals.
+        mode:
+            - None or "none": no normalization
+            - "zscore_global": z-score using global mean/std of REAL data
+            - "zscore_per_signal": z-score each signal independently
 
         Returns
         -------
-        tuple
-            - **mean_distance** (*float*): Average of the *N* per‑real minima.
-            - **min_distance** (*float*): Smallest *overall* distance encountered.
-            - **min_real_index** (*int*): Index of the real sample participating in *min_distance*.
-            - **min_synthetic_index** (*int*): Index of the synthetic sample participating in *min_distance*.
+        R_norm, S_norm, stats
         """
-        # Flatten once to avoid repeated work
-        real_data = [np.asarray(signal).flatten() for signal in real_data]
-        synthetic_data = [np.asarray(signal).flatten() for signal in synthetic_data]
+        # Flatten everything first
+        R = [np.asarray(s, float).flatten() for s in real_data]
+        S = [np.asarray(s, float).flatten() for s in synthetic_data]
 
-        per_real_min: List[float] = []   # holds the row minima
-        min_distance = float("inf")      # global minimum
-        min_real_index = -1
+        if mode is None or mode == "none":
+            return R, S, {}
+
+        if mode == "zscore_global":
+            all_real = np.concatenate(R)
+            mean = float(all_real.mean())
+            std = float(all_real.std())
+            if std == 0:
+                std = 1.0
+            R = [(r - mean) / std for r in R]
+            S = [(s - mean) / std for s in S]
+            return R, S, {"mean": mean, "std": std}
+
+        if mode == "zscore_per_signal":
+            def z_per(sig: np.ndarray) -> np.ndarray:
+                m = sig.mean()
+                s = sig.std()
+                if s == 0:
+                    s = 1.0
+                return (sig - m) / s
+
+            R = [z_per(r) for r in R]
+            S = [z_per(s) for s in S]
+            return R, S, {}
+
+        raise ValueError(f"Unknown normalization mode: {mode}")
+
+
+    # Generic helpers for NN-based distances
+
+    def _nn_min_distances(
+        self,
+        data_A: ArrayLike,
+        data_B: ArrayLike,
+        metric_function: Callable[[np.ndarray, np.ndarray], float],
+        *,
+        normalize: str | None = None,
+        length_normalize: bool = False,
+        exclude_self: bool = False,
+    ) -> np.ndarray:
+        """
+        For each signal in data_A, compute the distance to its nearest neighbour
+        in data_B and return the vector of per-sample minima.
+
+        If exclude_self=True and data_A and data_B represent the same dataset
+        (R–R case), the distance to the sample itself (i == j) is ignored.
+        """
+        A_norm, B_norm, _ = self._normalize_signals(data_A, data_B, mode=normalize)
+
+        per_A_min: list[float] = []
+
+        for i, sig_A in enumerate(A_norm):
+            best = float("inf")
+            for j, sig_B in enumerate(B_norm):
+                if exclude_self and i == j:
+                    continue
+                d = metric_function(sig_A, sig_B)
+                if length_normalize:
+                    L = sig_A.size
+                    if L > 0:
+                        d /= np.sqrt(L)
+                if d < best:
+                    best = d
+            per_A_min.append(best)
+
+        return np.asarray(per_A_min, dtype=float)
+
+    def compute_distance_metric(
+        self,
+        real_data: ArrayLike,
+        synthetic_data: ArrayLike,
+        metric_function: Callable[[np.ndarray, np.ndarray], float],
+        *,
+        normalize: str | None = None,
+        length_normalize: bool = False,
+    ):
+        """
+        Compute a nearest-neighbour distance metric (R–S only).
+
+        For every real sample we locate the closest synthetic sample
+        (according to *metric_function*) and then average those minima.
+        """
+        rs = self._nn_min_distances(
+            real_data,
+            synthetic_data,
+            metric_function,
+            normalize=normalize,
+            length_normalize=length_normalize,
+            exclude_self=False,
+        )
+
+        mean_distance = float(rs.mean()) if rs.size else np.nan
+        min_distance = float(rs.min()) if rs.size else np.nan
+
+        # Index of the real sample that attains the global minimum
+        min_real_index = int(np.argmin(rs)) if rs.size else -1
+
+        # To recover the corresponding synthetic index, recompute for that real
         min_synthetic_index = -1
+        if min_real_index >= 0:
+            # Re-normalise only that pair set
+            R_norm, S_norm, _ = self._normalize_signals(
+                [real_data[min_real_index]], synthetic_data, mode=normalize
+            )
+            sig_A = R_norm[0]
+            best = float("inf")
+            best_j = -1
+            for j, sig_B in enumerate(S_norm):
+                d = metric_function(sig_A, sig_B)
+                if length_normalize:
+                    L = sig_A.size
+                    if L > 0:
+                        d /= np.sqrt(L)
+                if d < best:
+                    best = d
+                    best_j = j
+            min_synthetic_index = best_j
 
-        # -----------------------------------------------------------------
-        # Outer loop ‑‑ iterate over each *real* record --------------------
-        # -----------------------------------------------------------------
-        for i, real_signal in enumerate(real_data):
-            # Compute distances to **all** synthetic signals for this real record
-            row_dists = []
-            for j, synthetic_signal in enumerate(synthetic_data):
-                d = metric_function(real_signal, synthetic_signal)
-                row_dists.append(d)
-
-                # Track global min while we're here ----------------------
-                if d < min_distance:
-                    min_distance = d
-                    min_real_index = i
-                    min_synthetic_index = j
-
-            # Store the closest synthetic neighbour for real_data[i]
-            per_real_min.append(min(row_dists))
-
-        # The score we report is the average of those minima --------------
-        mean_distance = float(np.mean(per_real_min)) if per_real_min else np.nan
         return mean_distance, min_distance, min_real_index, min_synthetic_index
-  
-    # Metric‑specific wrappers --------------------------------------------
 
-    def compute_wasserstein_distance(self, real_data, synthetic_data):
+    # Raw-signal distance metrics
+
+    @staticmethod
+    def _cosine_distance(x: np.ndarray, y: np.ndarray, eps: float = 1e-12) -> float:
         """
-        Compute the **Wasserstein Distance (WD)** between real and synthetic data
-        distributions using histogram approximations.
+        Cosine distance = 1 − cosine similarity.
         """
+        x = np.asarray(x)
+        y = np.asarray(y)
+        nx = np.linalg.norm(x)
+        ny = np.linalg.norm(y)
+        if nx < eps or ny < eps:
+            return 1.0  # maximally dissimilar if one vector is (almost) zero
+        cos_sim = float(np.dot(x, y) / (nx * ny))
+        cos_sim = max(min(cos_sim, 1.0), -1.0)  # clip
+        return 1.0 - cos_sim
 
-        def wasserstein_func(real_signal, synthetic_signal):
-            hist_1, _ = np.histogram(real_signal, bins=self.num_bins, range=self.range_bins, density=True)
-            hist_2, _ = np.histogram(synthetic_signal, bins=self.num_bins, range=self.range_bins, density=True)
-            bin_midpoints = np.linspace(self.range_bins[0], self.range_bins[1], self.num_bins)
-            return wasserstein_distance(bin_midpoints, bin_midpoints,
-                                         u_weights=hist_1, v_weights=hist_2)
-
-        return self.compute_distance_metric(real_data, synthetic_data, wasserstein_func)
-
-    def compute_euclidean_distance(self, real_data, synthetic_data):
+    @staticmethod
+    def _dtw_distance(x: np.ndarray, y: np.ndarray) -> float:
         """
-        Compute the **Euclidean Distance (ED)** between real and synthetic data
-        distributions using histogram approximations.
+        Simple DTW distance (O(N*M) DP implementation).
         """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        n, m = len(x), len(y)
+        cost = np.full((n + 1, m + 1), np.inf)
+        cost[0, 0] = 0.0
 
-        def euclidean_func(real_signal, synthetic_signal):
-            # Histogram → probability distribution
-            hist_1, _ = np.histogram(real_signal, bins=self.num_bins, range=self.range_bins, density=True)
-            hist_2, _ = np.histogram(synthetic_signal, bins=self.num_bins, range=self.range_bins, density=True)
-            hist_1 = hist_1 / np.sum(hist_1)
-            hist_2 = hist_2 / np.sum(hist_2)
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                diff = x[i - 1] - y[j - 1]
+                d = abs(diff)
+                cost[i, j] = d + min(cost[i - 1, j], cost[i, j - 1], cost[i - 1, j - 1])
 
-            # Compute Euclidean distance between the two histograms [0,1]
-            distance = euclidean(hist_1, hist_2) / np.sqrt(2.0)
-            return distance
+        return float(cost[n, m])
 
-        return self.compute_distance_metric(real_data, synthetic_data, euclidean_func)
-
-    def compute_js_divergence(self, real_data, synthetic_data):
+    def compute_l2_distance(
+        self,
+        real_data,
+        synthetic_data,
+        *,
+        normalize: str | None = "zscore_global",
+        length_normalize: bool = True,
+    ):
         """
-        Compute the **Jensen‑Shannon Divergence (JSD)** between real and synthetic data
-        distributions using histogram approximations.
+        Nearest-neighbour Euclidean (L2) distance on signals.
         """
+        def l2_func(real_signal, synthetic_signal):
+            return euclidean(real_signal, synthetic_signal)
 
-        def jsd_func(real_signal, synthetic_signal):
-            hist_1, _ = np.histogram(real_signal, bins=self.num_bins, range=self.range_bins, density=True)
-            hist_2, _ = np.histogram(synthetic_signal, bins=self.num_bins, range=self.range_bins, density=True)
-            hist_1 += 1e-10  # Prevent 0‑probabilities
-            hist_2 += 1e-10
-            hist_1 /= np.sum(hist_1)
-            hist_2 /= np.sum(hist_2)
-            return jensenshannon(hist_1, hist_2)
+        return self.compute_distance_metric(
+            real_data,
+            synthetic_data,
+            l2_func,
+            normalize=normalize,
+            length_normalize=length_normalize,
+        )
 
-        return self.compute_distance_metric(real_data, synthetic_data, jsd_func)
-
-    def compute_membership_inference(self,X_real: np.ndarray,y_real: np.ndarray,X_synthetic: np.ndarray,
-            *,member_split: float = 0.5,attack_test_split: float = 0.3,random_state: int = 42) -> dict[str, float | np.ndarray]:
+    def compute_cosine_distance(
+        self,
+        real_data,
+        synthetic_data,
+        *,
+        normalize: str | None = "zscore_global",
+    ):
         """
-        Computes Membership Inference Risk (MIR) using black-box statistics.
-
-        This function splits the real data into "members" and "non-members",
-        trains a classifier (target model) on the member set, and estimates
-        membership leakage based on four metrics:
-
-        - Correctness (whether prediction is right)
-        - Confidence (probability of predicted class)
-        - Entropy (prediction uncertainty)
-        - Modified Entropy (penalized uncertainty on true class)
-
-        It also computes how likely synthetic samples would be considered members
-        based on confidence thresholding.
-
-        Returns
-        -------
-        dict:  {'correctness_attack_acc': float,
-                'confidence_attack_acc': float,
-                'entropy_attack_acc': float,
-                'modified_entropy_attack_acc': float,
-                'synthetic_pred_scores': np.ndarray,
-                'synthetic_member_fraction': float}
+        Nearest-neighbour cosine distance (1 − cosine similarity) on signals.
         """
+        def cos_func(real_signal, synthetic_signal):
+            return self._cosine_distance(real_signal, synthetic_signal)
 
-        # Split real data into training (members) and testing (non-members)
+        return self.compute_distance_metric(
+            real_data,
+            synthetic_data,
+            cos_func,
+            normalize=normalize,
+            length_normalize=False,  # cosine already scale-insensitive
+        )
+
+    def compute_dtw_distance(
+        self,
+        real_data,
+        synthetic_data,
+        *,
+        normalize: str | None = "zscore_global",
+        length_normalize: bool = True,
+    ):
+        """
+        Nearest-neighbour DTW distance on signals.
+        """
+        def dtw_func(real_signal, synthetic_signal):
+            return self._dtw_distance(real_signal, synthetic_signal)
+
+        return self.compute_distance_metric(
+            real_data,
+            synthetic_data,
+            dtw_func,
+            normalize=normalize,
+            length_normalize=length_normalize,
+        )
+
+
+    # Distance-only privacy metrics (R–S)
+
+    def compute_privacy_metrics(
+        self,
+        real_data,
+        synthetic_data,
+        *,
+        normalize: str | None = "zscore_global",
+        length_normalize: bool = True,
+    ):
+        """
+        Compute distance-based privacy metrics (no MIR).
+
+        Includes:
+        - NN distances (L2, cosine, DTW) on signals.
+        """
+        l2, l2_min, l2_real_idx, l2_synth_idx = self.compute_l2_distance(
+            real_data, synthetic_data,
+            normalize=normalize,
+            length_normalize=length_normalize,
+        )
+        cos, cos_min, cos_real_idx, cos_synth_idx = self.compute_cosine_distance(
+            real_data, synthetic_data,
+            normalize=normalize,
+        )
+        dtw, dtw_min, dtw_real_idx, dtw_synth_idx = self.compute_dtw_distance(
+            real_data, synthetic_data,
+            normalize=normalize,
+            length_normalize=length_normalize,
+        )
+
+        result = {
+            "l2": l2, "l2_min": l2_min, "l2_real_idx": l2_real_idx, "l2_synth_idx": l2_synth_idx,
+            "cosine": cos, "cosine_min": cos_min, "cosine_real_idx": cos_real_idx, "cosine_synth_idx": cos_synth_idx,
+            "dtw": dtw, "dtw_min": dtw_min, "dtw_real_idx": dtw_real_idx, "dtw_synth_idx": dtw_synth_idx,
+        }
+        return result
+
+    def compute_distance_metrics(
+            self,
+            real_data,
+            synthetic_data,
+            *,
+            normalize: str | None = "zscore_global",
+            length_normalize: bool = True,
+    ):
+        """
+        Compute and print nearest-neighbour distance metrics **and**
+        their Cohen-style effect sizes.
+
+        Distances are:
+            - L2 (Euclidean) NN distance
+            - Cosine NN distance (1 − cosine similarity)
+            - DTW NN distance
+
+
+        All distances are computed after the chosen `normalize` step.
+        With the defaults (normalize="zscore_global", length_normalize=True),
+        L2 and DTW can be read as RMSE-like distances in units of REAL-data
+        standard deviation per sample.
+        """
+        print("📏 Nearest-Neighbour distances between real and synthetic data:")
+        if normalize == "zscore_global":
+            print("    -> Signals z-scored using real data SD "
+                  "(L2/DTW in units of real SD per sample).")
+
+        # --- 1) R–S distances ---
+        metrics = self.compute_privacy_metrics(
+            real_data,
+            synthetic_data,
+            normalize=normalize,
+            length_normalize=length_normalize,
+        )
+
+        if not isinstance(metrics, dict):
+            raise RuntimeError(
+                "compute_privacy_metrics returned None or a non-dict. "
+                "Check for early returns or exceptions inside that function."
+            )
+
+        for k in ("l2", "l2_min", "cosine", "cosine_min", "dtw", "dtw_min"):
+            if metrics.get(k) is None:
+                metrics[k] = np.nan
+
+        # 2) Effect sizes d (R–S vs R–R)
+        eff = self.compute_distance_effect_sizes(
+            real_data,
+            synthetic_data,
+            normalize=normalize,
+            length_normalize=length_normalize,
+        )
+
+        # Attach effect sizes (and optionally RR baselines) to the dict
+        metrics["l2_d"] = eff["l2"]["effect_size_d"]
+        metrics["cosine_d"] = eff["cos"]["effect_size_d"]
+        metrics["dtw_d"] = eff["dtw"]["effect_size_d"]
+
+        metrics["l2_rr_mean"] = eff["l2"]["real_real_mean"]
+        metrics["cosine_rr_mean"] = eff["cos"]["real_real_mean"]
+        metrics["dtw_rr_mean"] = eff["dtw"]["real_real_mean"]
+
+        # Printing helper
+        def _interpret_d(d: float) -> str:
+            if d < 0.20:
+                return "negligible (very high privacy risk)"
+            elif d < 0.50:
+                return "small (high privacy risk)"
+            elif d < 0.80:
+                return "medium (moderate privacy risk)"
+            else:
+                return "large (low privacy risk/ high separation)"
+
+        print(f"L2 distance (mean NN): {metrics['l2']:.4f} "
+              f"(min: {metrics['l2_min']:.4f})")
+        print(f"    - L2 effect size d (R–S vs R–R): {metrics['l2_d']:.2f} "
+              f"- {_interpret_d(metrics['l2_d'])}")
+
+        print(f"Cosine distance (mean NN): {metrics['cosine']:.4f} "
+              f"(min: {metrics['cosine_min']:.4f})")
+        print(f"    - Cosine effect size d: {metrics['cosine_d']:.2f} "
+              f"- {_interpret_d(metrics['cosine_d'])}")
+
+        print(f"DTW distance (mean NN): {metrics['dtw']:.4f} "
+              f"(min: {metrics['dtw_min']:.4f})")
+        print(f"    - DTW effect size d: {metrics['dtw_d']:.2f} "
+              f"- {_interpret_d(metrics['dtw_d'])}\n")
+
+        return metrics
+
+    # Distance effect sizes (Cohen-style)
+
+    def compute_distance_effect_sizes(
+        self,
+        real_data: ArrayLike,
+        synthetic_data: ArrayLike,
+        *,
+        normalize: str | None = "zscore_global",
+        length_normalize: bool = True,
+    ) -> dict:
+        """
+        Compute Cohen-style effect sizes comparing:
+
+            - R–R NN distances (baseline variability of real data)
+            - R–S NN distances (how close synthetic data gets to real)
+
+        For each metric M ∈ {L2, COS, DTW}:
+
+            d_M = ( mean_R-S_M − mean_R-R_M ) / std_R-R_M
+
+        Interpretation (Cohen, 1988, adapted):
+
+            d < 0.20      : negligible / very high privacy
+            0.20 ≤ d < 0.50 : small effect / high privacy
+            0.50 ≤ d < 0.80 : medium effect / moderate privacy
+            d ≥ 0.80        : large effect / low privacy
+        """
+        results = {}
+
+        # Helper to avoid repetition
+        metrics = {
+            "l2":  (lambda x, y: euclidean(x, y), True),
+            "cos": (self._cosine_distance, False),
+            "dtw": (self._dtw_distance, True),
+        }
+
+        for name, (metric_func, len_norm) in metrics.items():
+            # R–R baseline: NN distance to other real signals (exclude self)
+            rr = self._nn_min_distances(
+                real_data,
+                real_data,
+                metric_func,
+                normalize=normalize,
+                length_normalize=len_norm and length_normalize,
+                exclude_self=True,
+            )
+
+            # R–S distances: NN distance to synthetic
+            rs = self._nn_min_distances(
+                real_data,
+                synthetic_data,
+                metric_func,
+                normalize=normalize,
+                length_normalize=len_norm and length_normalize,
+                exclude_self=False,
+            )
+
+            mu_rr = float(rr.mean())
+            std_rr = float(rr.std(ddof=1))
+            if std_rr == 0:
+                std_rr = 1.0
+            mu_rs = float(rs.mean())
+
+            d = (mu_rs - mu_rr) / std_rr
+
+            results[name] = {
+                "real_real_mean": mu_rr,
+                "real_real_std": std_rr,
+                "real_synth_mean": mu_rs,
+                "effect_size_d": d,
+            }
+
+        return results
+
+    # Membership inference (core engine, on feature matrices)
+
+    def compute_membership_inference(
+        self,
+        X_real: np.ndarray,
+        y_real: np.ndarray,
+        X_synthetic: np.ndarray,
+        *,
+        member_split: float = 0.5,
+        attack_test_split: float = 0.3,  # kept for future extension
+        random_state: int = 42,
+    ) -> dict[str, float | np.ndarray]:
+        """
+        Core membership inference attack.
+
+        Splits real data into "members" (training) and "non-members",
+        trains a target model on members, and evaluates attack success
+        using correctness, confidence, entropy, and modified entropy.
+        """
         X_mem, X_nonmem, y_mem, y_nonmem = train_test_split(
             X_real, y_real,
             test_size=member_split,
@@ -225,18 +544,16 @@ class Privacy:
             random_state=random_state
         )
 
-        # Train the target model on member data
         self.target_model.fit(X_mem, y_mem)
 
-        # Helper function to extract confidence, entropy, etc. for a dataset
         def get_outputs(model, X, y):
             probs = model.predict_proba(X)
             preds = np.argmax(probs, axis=1)
-            # Prediction confidence for true class
             conf = probs[np.arange(len(y)), y]
-            # Entropy = uncertainty of prediction
-            entr = np.sum(probs * np.clip(-np.log(np.maximum(probs, 1e-30)), 0, 100), axis=1)
-            # Modified entropy = penalized confidence on true label
+            entr = np.sum(
+                probs * np.clip(-np.log(np.maximum(probs, 1e-30)), 0, 100),
+                axis=1
+            )
             rev_probs = 1 - probs
             log_probs = -np.log(np.maximum(probs, 1e-30))
             log_rev_probs = -np.log(np.maximum(rev_probs, 1e-30))
@@ -252,18 +569,16 @@ class Privacy:
                 'mod_entr': mod_entr
             }
 
-        # Compute stats for members and non-members
         stats_mem = get_outputs(self.target_model, X_mem, y_mem)
         stats_nonmem = get_outputs(self.target_model, X_nonmem, y_nonmem)
 
-        # Compute attack accuracy using thresholding for each statistic
         def infer_acc(name, tr_vals, te_vals):
             all_vals = np.concatenate([tr_vals, te_vals])
             best_acc = 0.0
             for t in all_vals:
                 acc = 0.5 * (
-                        np.sum(tr_vals >= t) / len(tr_vals) +
-                        np.sum(te_vals < t) / len(te_vals)
+                    np.sum(tr_vals >= t) / len(tr_vals) +
+                    np.sum(te_vals < t) / len(te_vals)
                 )
                 if acc > best_acc:
                     best_acc = acc
@@ -271,8 +586,8 @@ class Privacy:
             return float(best_acc)
 
         acc_corr = 0.5 * (
-                np.mean(stats_mem['correct']) +
-                1 - np.mean(stats_nonmem['correct'])
+            np.mean(stats_mem['correct']) +
+            1 - np.mean(stats_nonmem['correct'])
         )
         print(f"🕵️ Attack via correctness: acc = {acc_corr:.3f}")
 
@@ -280,10 +595,9 @@ class Privacy:
         acc_entr = infer_acc('entropy', -stats_mem['entr'], -stats_nonmem['entr'])
         acc_mod_entr = infer_acc('modified entropy', -stats_mem['mod_entr'], -stats_nonmem['mod_entr'])
 
-        # Compute synthetic membership likelihood using confidence threshold
         syn_probs = self.target_model.predict_proba(X_synthetic)
         syn_conf = syn_probs.max(axis=1)
-        threshold = np.median(stats_mem['conf'])  # Use training members as baseline
+        threshold = np.median(stats_mem['conf'])
         syn_member_fraction = float((syn_conf > threshold).mean())
 
         return {
@@ -295,191 +609,50 @@ class Privacy:
             'synthetic_member_fraction': syn_member_fraction
         }
 
-    def compute_privacy_metrics(self, real_data, synthetic_data,
-                                X_real=None, y_real=None, X_synth=None,
-                                shadow_train=None, shadow_test=None,
-                                target_train=None, target_test=None,
-                                use_new_mir=True):
+    # Public MIR-only wrapper (builds X_real and X_synth internally)
+
+    def compute_mir_metrics(
+        self,
+        real_data: ArrayLike,
+        synthetic_data: ArrayLike,
+        y_real: np.ndarray,
+        *,
+        normalize: str | None = "zscore_global",
+        member_split: float = 0.5,
+        attack_test_split: float = 0.3,
+        random_state: int = 42,
+        verbose: bool = True,
+    ) -> dict[str, float | np.ndarray]:
         """
-           Computes all privacy evaluation metrics in one step.
-
-           Includes:
-           - Statistical distances (WD, ED, JSD) using histogram comparison
-           - Membership Inference Risk (MIR), either:
-               - Black-box benchmark (default)
-               - Legacy attack model (if use_new_mir=False)
-
-           Parameters
-           ----------
-           real_data : list or np.ndarray
-               Real signals (used for histogram distance metrics)
-           synthetic_data : list or np.ndarray
-               Synthetic signals (used for histogram distance metrics)
-           X_real, y_real : np.ndarray, optional
-               Real tabular data and labels (used for legacy MIR)
-           X_synth : np.ndarray, optional
-               Synthetic tabular data (used for legacy MIR)
-           shadow_train, shadow_test, target_train, target_test : tuple, optional
-               Each is a (probabilities, labels) tuple for black-box MIR
-           use_new_mir : bool
-               Whether to use the benchmark-style black-box MIR (default: True)
-
-           Returns
-           -------
-           dict
-               Dictionary with keys:
-               - wd, ed, jsd: average distances
-               - *_min, *_real_idx, *_synth_idx: info on closest pair
-               - mir_*: various membership inference accuracy metrics
-           """
-
-        # Distance metrics
-        wd, wd_min, wd_real_idx, wd_synth_idx = self.compute_wasserstein_distance(real_data, synthetic_data)
-        ed, ed_min, ed_real_idx, ed_synth_idx = self.compute_euclidean_distance(real_data, synthetic_data)
-        jsd, jsd_min, jsd_real_idx, jsd_synth_idx = self.compute_js_divergence(real_data, synthetic_data)
-
-        result = {
-            "wd": wd, "wd_min": wd_min, "wd_real_idx": wd_real_idx, "wd_synth_idx": wd_synth_idx,
-            "ed": ed, "ed_min": ed_min, "ed_real_idx": ed_real_idx, "ed_synth_idx": ed_synth_idx,
-            "jsd": jsd, "jsd_min": jsd_min, "jsd_real_idx": jsd_real_idx, "jsd_synth_idx": jsd_synth_idx,
-        }
-
-        # Membership Inference Risk - Black-box benchmark method
-        if use_new_mir and all(v is not None for v in [shadow_train, shadow_test, target_train, target_test]):
-            try:
-                import numpy as np
-
-                def _log_value(probs, eps=1e-30):
-                    return -np.log(np.maximum(probs, eps))
-
-                def _entropy(probs):
-                    return np.sum(probs * _log_value(probs), axis=1)
-
-                def _modified_entropy(probs, labels):
-                    log_probs = _log_value(probs)
-                    reverse_probs = 1 - probs
-                    log_reverse = _log_value(reverse_probs)
-                    mod_probs = np.copy(probs)
-                    mod_log = np.copy(log_reverse)
-                    mod_probs[np.arange(len(labels)), labels] = reverse_probs[np.arange(len(labels)), labels]
-                    mod_log[np.arange(len(labels)), labels] = log_probs[np.arange(len(labels)), labels]
-                    return np.sum(mod_probs * mod_log, axis=1)
-
-                def _correctness(probs, labels):
-                    return (np.argmax(probs, axis=1) == labels).astype(int)
-
-                def _threshold_acc(val_tr, val_te):
-                    all_vals = np.concatenate([val_tr, val_te])
-                    best_acc = 0
-                    for t in all_vals:
-                        acc = 0.5 * (
-                                np.sum(val_tr >= t) / len(val_tr) +
-                                np.sum(val_te < t) / len(val_te)
-                        )
-                        if acc > best_acc:
-                            best_acc = acc
-                    return best_acc
-
-                s_tr_out, s_tr_y = shadow_train
-                s_te_out, s_te_y = shadow_test
-                t_tr_out, t_tr_y = target_train
-                t_te_out, t_te_y = target_test
-
-                acc_results = {}
-                acc_results["mir_conf_acc"] = _threshold_acc(
-                    np.array([s_tr_out[i, s_tr_y[i]] for i in range(len(s_tr_y))]),
-                    np.array([s_te_out[i, s_te_y[i]] for i in range(len(s_te_y))])
-                )
-                acc_results["mir_entropy_acc"] = _threshold_acc(
-                    -_entropy(s_tr_out), -_entropy(s_te_out)
-                )
-                acc_results["mir_mod_entropy_acc"] = _threshold_acc(
-                    -_modified_entropy(s_tr_out, s_tr_y), -_modified_entropy(s_te_out, s_te_y)
-                )
-                acc_results["mir_correctness_acc"] = 0.5 * (
-                        np.sum(_correctness(t_tr_out, t_tr_y)) / len(t_tr_y) +
-                        (1 - np.sum(_correctness(t_te_out, t_te_y)) / len(t_te_y))
-                )
-
-                result.update(acc_results)
-
-            except Exception as e:
-                print(f"[Warning] MIR (black-box style) computation failed: {e}")
-
-        # Legacy membership inference method (optional fallback)
-        elif not use_new_mir and X_real is not None and y_real is not None and X_synth is not None:
-            try:
-                mir_results = self.compute_membership_inference(X_real, y_real, X_synth)
-
-                # Attach accuracies with consistent keys
-                result.update({
-                    "confidence_attack_acc": mir_results["confidence_attack_acc"],
-                    "correctness_attack_acc": mir_results["correctness_attack_acc"],
-                    "entropy_attack_acc": mir_results["entropy_attack_acc"],
-                    "modified_entropy_attack_acc": mir_results["modified_entropy_attack_acc"],
-                    "synthetic_member_fraction": mir_results["synthetic_member_fraction"],
-                })
-
-            except Exception as e:
-                print(f"[Warning] Legacy MIR computation failed: {e}")
-
-        return result
-
-    def compute_distance_metrics(self, real_data, synthetic_data):
+        Compute and (optionally) print Membership Inference Risk (MIR) metrics.
         """
-        Print only the distance metrics (WD, ED, JSD) between real and synthetic data.
-        """
-        print("📏 Distance Metrics Between Real and Synthetic Data:")
-        metrics = self.compute_privacy_metrics(real_data, synthetic_data)
-
-        if not isinstance(metrics, dict):
-            raise RuntimeError(
-                "compute_privacy_metrics returned None or a non-dict. "
-                "Check for early returns or exceptions inside that function."
-            )
-
-        # Safely read with .get so a missing key doesn’t crash
-        wd = metrics.get('wd');
-        wd_min = metrics.get('wd_min')
-        ed = metrics.get('ed');
-        ed_min = metrics.get('ed_min')
-        jsd = metrics.get('jsd');
-        jsd_min = metrics.get('jsd_min')
-
-        # If any are None, set to np.nan for printing
-        for k in ("wd", "wd_min", "ed", "ed_min", "jsd", "jsd_min"):
-            if metrics.get(k) is None:
-                metrics[k] = np.nan
-
-        print(f"  - Wasserstein Distance (WD): {metrics['wd']:.4f} (min: {metrics['wd_min']:.4f})")
-        print(f"  - Euclidean Distance   (ED): {metrics['ed']:.4f} (min: {metrics['ed_min']:.4f})")
-        print(f"  - Jensen–Shannon Divergence (JSD): {metrics['jsd']:.4f} (min: {metrics['jsd_min']:.4f})\n")
-
-        return metrics
-        
-    def compute_mir(self, real_data, synthetic_data):
-        """
-        Compute and print Membership Inference Risk (MIR) metrics between real and synthetic data.
-        Requires real_data and synthetic_data to be numpy arrays and properly labeled.
-        """
-        # Convert real/synthetic to fake tabular format if needed
-        X_real = np.stack(real_data)
-        num_samples = len(X_real)
-        half = num_samples // 2
-        y_real = np.array([0] * half + [1] * (num_samples - half))
-        np.random.shuffle(y_real)
-        X_synth = np.stack(synthetic_data)
-
-        print("🔐 Membership Inference Risk (MIR) Metrics:")
-        privacy = Privacy()
-        metrics = privacy.compute_privacy_metrics(
-            real_data, synthetic_data,
-            X_real=X_real, y_real=y_real, X_synth=X_synth,
-            use_new_mir=False  # using legacy attack for simplicity
+        # 1) Normalize + flatten signals (same as distances)
+        R_norm, S_norm, _ = self._normalize_signals(
+            real_data, synthetic_data, mode=normalize
         )
-        print(f"  - Correctness Attack Acc: {metrics.get('correctness_attack_acc', 'n/a')}")
-        print(f"  - Confidence Attack Acc: {metrics.get('confidence_attack_acc', 'n/a')}")
-        print(f"  - Entropy Attack Acc: {metrics.get('entropy_attack_acc', 'n/a')}")
-        print(f"  - Modified Entropy Attack Acc: {metrics.get('modified_entropy_attack_acc', 'n/a')}")
-        print(f"  - Synthetic Member Fraction: {metrics.get('synthetic_member_fraction', 'n/a')}\n")
+
+        # 2) Build feature matrices by stacking flattened signals
+        X_real = np.stack(R_norm)
+        X_synth = np.stack(S_norm)
+
+        # 3) Run the core membership inference engine
+        mir_results = self.compute_membership_inference(
+            X_real=X_real,
+            y_real=y_real,
+            X_synthetic=X_synth,
+            member_split=member_split,
+            attack_test_split=attack_test_split,
+            random_state=random_state,
+        )
+
+        if verbose:
+            print("🔐 Membership Inference Risk (MIR) Metrics:")
+            print(f"  - Correctness attack acc     : {mir_results['correctness_attack_acc']:.3f}")
+            print(f"  - Confidence attack acc      : {mir_results['confidence_attack_acc']:.3f}")
+            print(f"  - Entropy attack acc         : {mir_results['entropy_attack_acc']:.3f}")
+            print(f"  - Modified entropy attack acc: {mir_results['modified_entropy_attack_acc']:.3f}")
+            print(f"  - Synthetic member fraction  : {mir_results['synthetic_member_fraction']:.3f}\n")
+
+        return mir_results
+
 
