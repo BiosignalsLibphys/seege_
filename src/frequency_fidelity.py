@@ -214,9 +214,26 @@ class FrequencyFidelity:
                 results[band] = {"statistic": stat, "p-value": p_value}
         return results
 
-    def perform_statistical_tests(self, real_power, synthetic_power, normality_results):
+    def perform_statistical_tests(self, real_power, synthetic_power, normality_results, alpha: float = 0.05):
         """
         Perform statistical tests for each frequency band based on normality results.
+
+        Parameters
+        ----------
+        real_power, synthetic_power : dict[str, list[float]]
+            Relative power values per band for real and synthetic data.
+        normality_results : dict
+            Output of test_normality().
+        alpha : float, optional
+            Significance level for hypothesis testing (default 0.05).
+
+           def perform_statistical_tests(self, real_power, synthetic_power, normality_results, alpha: float = 0.05):
+
+        Returns
+        -------
+        dict
+            Per-band results including test type, statistic, raw p-value, formatted p-value,
+            Cohen's d, significance flag, and short interpretation.
         """
         test_results = {}
 
@@ -229,27 +246,36 @@ class FrequencyFidelity:
 
             # If normal => paired t-test, else => Wilcoxon
             if normality_results[band]["p-value"] is not None and \
-                    normality_results[band]["p-value"] > 0.05:
+                    normality_results[band]["p-value"] > alpha:
                 stat, p_value = ttest_rel(real_vals, synthetic_vals)
                 test_type = "Paired t-test"
             else:
                 stat, p_value = wilcoxon(real_vals, synthetic_vals)
-                test_type = "Wilcoxon signed-rank test"
+                test_type = "Wilcoxon"
 
-            # Compute effect size
+            # Effect size
             d = self.compute_cohens_d(real_vals, synthetic_vals)
 
+            # Significance decision
+            significant = (p_value < alpha)
+            sig_text = "significant difference" if significant else "no significant difference"
+
+            # Keep original keys for compatibility + add new ones
             test_results[band] = {
                 "test": test_type,
-                "statistic": f"{stat:.3f}",
-                "p-value": self._format_p(p_value),
+                "statistic": f"{stat:.3f}",           # string, for backwards compatibility
+                "p-value": self._format_p(p_value),   # formatted string
+                "p_raw": float(p_value),              # raw float p-value
                 "cohens_d": d,
+                "alpha": alpha,
+                "significant": significant,
+                "interpretation": sig_text,
             }
 
         return test_results
 
     def compare_relative_power(self, real_data, synthetic_data,
-                                   analysis_band=None, win_seconds=None, window=None, detrend=None, overlap=None):
+                               analysis_band=None, win_seconds=None, window=None, detrend=None, overlap=None):
         """
         Computes relative power for real and synthetic data, tests normality,
         and performs statistical tests (only if data are 2D).
@@ -258,22 +284,22 @@ class FrequencyFidelity:
         if (isinstance(real_data, np.ndarray) and real_data.ndim == 1) or \
                 (isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1):
             _, _, real_power, _ = self.compute_relative_power(real_data, analysis_band, win_seconds, window,
-                                                                detrend, overlap)
+                                                              detrend, overlap)
             _, _, synth_power, _ = self.compute_relative_power(synthetic_data, analysis_band, win_seconds, window,
-                                                                detrend, overlap)
+                                                               detrend, overlap)
             print("Relative Bands Power (Sample):")
             for band in self.band_names:
                 r = np.mean(real_power[band]) * 100
                 s = np.mean(synth_power[band]) * 100
                 print(f"  {band}: Real: {r:.2f}%, Synthetic: {s:.2f}%, Diff: {abs(r - s):.2f}%")
-                print("⚠ Insufficient data to perform Statistical Analysis!\n")
+            print("⚠ Insufficient data to perform Statistical Analysis!\n")
             return {}
 
         # 2D => dataset
         _, _, real_power, _ = self.compute_relative_power(real_data, analysis_band, win_seconds, window, detrend,
-                                                            overlap)
+                                                          overlap)
         _, _, synth_power, _ = self.compute_relative_power(synthetic_data, analysis_band, win_seconds, window,
-                                                            detrend, overlap)
+                                                           detrend, overlap)
 
         print("Relative Bands Power (Dataset):")
         for band in self.band_names:
@@ -283,13 +309,16 @@ class FrequencyFidelity:
 
         normality = self.test_normality(real_power, synth_power)
         statistical_tests = self.perform_statistical_tests(real_power, synth_power, normality)
+
         print("Statistical Test Results (Dataset):")
         for band, res in statistical_tests.items():
+            sig_text = "significant difference" if res["significant"] else "no significant difference"
             print(
-                f"  {band}: Test={res['test']}, Stat={res['statistic']}, p-value={res['p-value']}, Cohen's d={res['cohens_d']:.3f}")
+                f"  {band}: {res['test']} | p={res['p-value']} | {sig_text} | Cohen's d={res['cohens_d']:.3f}"
+            )
         print()
-        return statistical_tests
 
+        return statistical_tests
 
     def spectral_coherence(self, real_signals, synthetic_signals, *, mode: str = "all_vs_all", rr_zip_strategy: str = "consecutive",
             ss_zip_strategy: str = "consecutive", per_band: bool = True, analysis_band=None, win_seconds = None, window = None,
@@ -499,7 +528,8 @@ class FrequencyFidelity:
         def _fmt(x):
             return "nan" if not np.isfinite(x) else f"{x:.3f}"
 
-        print(f"Mode: {mode} | RS spectral coherence={_fmt(rs_g_m)} (± {_fmt(rs_g_sd)}) ({analysis_type})")
+        #print(f"Mode: {mode} | RS spectral coherence={_fmt(rs_g_m)} (± {_fmt(rs_g_sd)}) ({analysis_type})")
+        print(f"Mode: {mode} ({analysis_type})")
         if mode == "zip":
             print(f"RR zip strategy: {rr_zip_strategy} | pairs={len(rr_globals)}")
             print(f"SS zip strategy: {ss_zip_strategy} | pairs={len(ss_globals)}")
