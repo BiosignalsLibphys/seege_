@@ -130,6 +130,9 @@ class TimeFidelity:
             "Synthetic_Activity": syn_mean[0],
             "Synthetic_Mobility": syn_mean[1],
             "Synthetic_Complexity": syn_mean[2],
+            "RelDiff_Activity": rel_diff[0],
+            "RelDiff_Mobility": rel_diff[1],
+            "RelDiff_Complexity": rel_diff[2],
         }
 
     def plot_hjorth_metrics(self, real_signals, synthetic_signals):
@@ -195,6 +198,23 @@ class TimeFidelity:
         ax3d.set_zlabel("Complexity", fontsize=15)
         ax3d.legend(fontsize=12)
 
+        # Normalise y-limits across the 3 histogram axes (ignore the 3D axis)
+        #axes_2d = fig.axes[:-1]  # the first three are the histograms
+        #y_max = max(ax.get_ylim()[1] for ax in axes_2d)
+        #for ax in axes_2d:
+            #ax.set_ylim(0, y_max)
+
+        # Normalise y-limits only for Activity and Mobility (first two axes)
+        axes_2d = fig.axes[:2]
+        y_max = max(ax.get_ylim()[1] for ax in axes_2d)
+        for ax in axes_2d:
+            ax.set_ylim(0, y_max)
+
         plt.tight_layout()
         plt.show()
+
+
+
+
+
 
