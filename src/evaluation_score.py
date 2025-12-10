@@ -54,14 +54,18 @@ def compute_amplitude_fidelity_score(real_data, synthetic_data, fs, *,
 
 def compute_time_fidelity_score(real_data, synthetic_data, weights=None):
     """
-    Compute a time-domain fidelity score between real and synthetic signals
+   Compute a time-domain fidelity score between real and synthetic signals
     using Hjorth parameter statistics.
 
     Integrated components (each mapped as S = 1/(1 + distance)):
-        1. Hjorth: Activity (WD)
-        2. Hjorth: Mobility (WD)
-        3. Hjorth: Complexity (WD)
-        4. Hjorth: Mahalanobis distance (means)
+        1. Normalised WD for Hjorth Activity
+        2. Normalised WD for Hjorth Mobility
+        3. Normalised WD for Hjorth Complexity
+        4. Mahalanobis distance between Hjorth means
+
+    All distances are in SD units:
+        - Hjorth WDs are normalised by the real-data SD.
+        - Mahalanobis is inherently scale-normalised via the covariance.
 
     Parameters
     ----------
@@ -86,43 +90,45 @@ def compute_time_fidelity_score(real_data, synthetic_data, weights=None):
             'activity': w, 'mobility': w, 'complexity': w, 'mahalanobis': w
         }
     # Ensure all keys exist; missing ones default to 0 (excluded from sum)
-    for k in ('activity','mobility','complexity','mahalanobis'):
+    for k in ('activity', 'mobility', 'complexity', 'mahalanobis'):
         weights.setdefault(k, 0.0)
 
     # Compute base Hjorth metrics
-    ts = TimeFidelity()
-    hj = ts.compute_hjorth_metrics(real_data, synthetic_data, verbose=False)
+    tf = TimeFidelity()
+    hj = tf.compute_hjorth_metrics(real_data, synthetic_data, verbose=False)
 
-    # Helper: distance -> similarity with NaN/Inf safety
     import numpy as _np
+
+    # distance (in SD units) -> similarity
     def _sim(d):
         d = float(d)
         if not _np.isfinite(d) or d < 0:
             return 0.0
         return 1.0 / (1.0 + d)
 
-    # Hjorth similarities
-    activity_score    = _sim(hj['WD_Activity'])
-    mobility_score    = _sim(hj['WD_Mobility'])
-    complexity_score  = _sim(hj['WD_Complexity'])
-    mahalanobis_score = _sim(hj['Mahalanobis'])
+    # Use SD-normalised WDs for Hjorth parameters
+    activity_score = _sim(hj['WD_Activity_normSD'])
+    mobility_score = _sim(hj['WD_Mobility_normSD'])
+    complexity_score = _sim(hj['WD_Complexity_normSD'])
 
+    # Mahalanobis is already scale-normalised
+    mahalanobis_score = _sim(hj['Mahalanobis'])
 
     # Weighted combination
     time_fidelity_score = (
-        weights['activity']    * activity_score   +
-        weights['mobility']    * mobility_score   +
-        weights['complexity']  * complexity_score +
-        weights['mahalanobis'] * mahalanobis_score
+            weights['activity'] * activity_score +
+            weights['mobility'] * mobility_score +
+            weights['complexity'] * complexity_score +
+            weights['mahalanobis'] * mahalanobis_score
     )
 
     # Print components
     print(f"Time Fidelity Score  : {time_fidelity_score:.3f}")
     print("Time Fidelity Components:")
-    print(f"  Activity: {activity_score:.3f}")
-    print(f"  Mobility: {mobility_score:.3f}")
-    print(f"  Complexity: {complexity_score:.3f}")
-    print(f"  Mahalanobis: {mahalanobis_score:.3f}")
+    print(f"  Activity   (norm WD): {activity_score:.3f}")
+    print(f"  Mobility   (norm WD): {mobility_score:.3f}")
+    print(f"  Complexity (norm WD): {complexity_score:.3f}")
+    print(f"  Mahalanobis        : {mahalanobis_score:.3f}")
 
     return time_fidelity_score
 
@@ -163,7 +169,7 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
     """
     # Default values definition
 
-    analysis_band = (0.5, 100.0)  # Hz
+    analysis_band = (0.5, 500.0)  # Hz
     win_seconds = 4.0  # Welch window length (s)
     window = 'hann'
     detrend = 'constant'
@@ -248,7 +254,7 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
     )
 
     print(f"Frequency Fidelity Score: {frequency_fidelity_score:.2f}")
-    return frequency_fidelity_score
+    #return frequency_fidelity_score
 
 
 def compute_time_frequency_fidelity_score(real_data, synthetic_data, fs, *, weights=None, mode: str = "auto",
@@ -355,12 +361,12 @@ def compute_time_frequency_fidelity_score(real_data, synthetic_data, fs, *, weig
         label = eff_mode if eff_mode != "zip" else f"zip"
         print(f"Time-frequency Fidelity Score: {mean_score:.3f} | mode: {label}, pairs: {len(scores)}")
 
-    out = (mean_score,)
-    if return_sd:
-        out += (sd_score,)
-    if return_per_pair:
-        out += (scores,)
-    return out if len(out) > 1 else out[0]
+    #out = (mean_score,)
+    #if return_sd:
+        #out += (sd_score,)
+    #if return_per_pair:
+        #out += (scores,)
+    #return out if len(out) > 1 else out[0]
 
 
 def compute_complexity_fidelity_score(
@@ -380,14 +386,15 @@ def compute_complexity_fidelity_score(
     Integrated components
     ---------------------
     Fractal (multifractal / cross-fractal), mapped via range-aware similarities:
-      1) DCCA   — cross Hurst exponent similarity   (S_H_dcca)
+      1) DCCA   — cross Hurst exponent similarity   (S_H_dcca → F_DCCA)
       2) MFDFA  — single-series H + H(q) curve      (S_H_mfdfa & S_Hq → F_MFDFA)
       3) MFDCCA — cross H(q) + Δα spectrum width    (S_H_mfdcca & S_Dalpha → F_MFDCCA)
 
-    Entropy/complexity (distribution similarity via WD), mapped as S = 1 / (1 + WD):
-      4) Sample Entropy           (WD_SampEn → S_SampEn)
-      5) Permutation Entropy      (WD_PermEn → S_PermEn)
-      6) Lempel–Ziv Complexity    (WD_LZC    → S_LZC)
+    Entropy/complexity (distribution similarity via SD-normalised WD), mapped as
+        S = 1 / (1 + WD_norm):
+      4) Sample Entropy           (WD_SampEn_norm  → S_SampEn)
+      5) Permutation Entropy      (WD_PermEn_norm  → S_PermEn)
+      6) Lempel–Ziv Complexity    (WD_LZC_norm     → S_LZC)
 
     Parameters
     ----------
@@ -408,12 +415,6 @@ def compute_complexity_fidelity_score(
     -------
     float
         Complexity fidelity in [0,1] (higher ⇒ closer match).
-
-    Example
-    -------
-    real_data = np.random.randn(10, 2048)      # 10 real signals
-    synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals
-    complexity_score = compute_complexity_fidelity_score(real_data, synthetic_data)
     """
 
     # Default: equal weights across ALL subscores (6 components)
@@ -450,14 +451,16 @@ def compute_complexity_fidelity_score(
             return None
         return np.nanmean(np.vstack(Hqs), axis=0)
 
-    # DCCA (use Hxy only)
+    # Fractality
+
+    # 1) DCCA (use Hxy only)
     fs_dcca = ComplexityFidelity(real_data, synthetic_data, method='DCCA', q_range=q_range)
     fs_dcca.compute_fractal_metrics()
     H_rr, H_rs = fs_dcca.means[:2]
     S_H_dcca = _sim_range(H_rr, H_rs, lo=0.3, hi=1.2)
     F_DCCA = S_H_dcca  # rho dropped from scoring to avoid inflation
 
-    #  MFDFA: H level + H(q) curve shape
+    # 2) MFDFA: H level + H(q) curve shape
     fs_mfdfa = ComplexityFidelity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
     fs_mfdfa.compute_fractal_metrics()
     H_r, H_s = fs_mfdfa.means
@@ -475,7 +478,7 @@ def compute_complexity_fidelity_score(
 
     F_MFDFA = S_H_mfdfa if np.isnan(S_Hq) else 0.5 * S_H_mfdfa + 0.5 * S_Hq
 
-    #  MFDCCA: cross H(q) & Δα
+    # 3) MFDCCA: cross H(q) & Δα
     fs_mfdcca = ComplexityFidelity(real_data, synthetic_data, method='MFDCCA', q_range=q_range)
     fs_mfdcca.compute_fractal_metrics()
     Hc_rr, Hc_rs = fs_mfdcca.means[:2]
@@ -485,26 +488,29 @@ def compute_complexity_fidelity_score(
     S_Dalpha = _sim_range(Da_rr, Da_rs, lo=0.0, hi=0.5)
     F_MFDCCA = 0.7 * S_H_mfdcca + 0.3 * S_Dalpha
 
-    # Entropy/complexity (WD → similarity)
-    # Use the class method to compute WDs; then map S = 1/(1+WD)
+    # Entropy/algorithmic complexity
+
+    # Use SD-normalised WDs returned by compute_entropy_complexity_metrics
     cf_entropy = ComplexityFidelity(real_data, synthetic_data, method='MFDFA', q_range=q_range)
     e = cf_entropy.compute_entropy_complexity_metrics(
         real_data, synthetic_data,
         sampen_m=2, sampen_r=None,  # r defaults to 0.2*std
         permen_m=3, permen_tau=1,
         lzc_threshold=None,
-        n_surrogates=0,             # set >0 if you want surrogate z-scores (not used in score)
+        n_surrogates=0,
         verbose=False
     )
 
-    def _to_sim(wd):
-        return np.nan if not np.isfinite(wd) else 1.0 / (1.0 + float(wd))
+    def _to_sim(wd_norm):
+        # wd_norm: SD-normalised WD
+        return np.nan if not np.isfinite(wd_norm) else 1.0 / (1.0 + float(wd_norm))
 
-    S_SampEn = _to_sim(e.get("WD_SampEn", np.nan))
-    S_PermEn = _to_sim(e.get("WD_PermEn", np.nan))
-    S_LZC    = _to_sim(e.get("WD_LZC",    np.nan))
+    S_SampEn = _to_sim(e.get("WD_SampEn_norm", np.nan))
+    S_PermEn = _to_sim(e.get("WD_PermEn_norm", np.nan))
+    S_LZC    = _to_sim(e.get("WD_LZC_norm",    np.nan))
 
-    # Aggregate
+    # Aggregation
+
     subscores = {
         'dcca':   F_DCCA,
         'mfdfa':  F_MFDFA,
@@ -514,6 +520,7 @@ def compute_complexity_fidelity_score(
         'lzc':    S_LZC
     }
 
+    # Keep only finite subscores
     valid_vals = [(k, v) for k, v in subscores.items() if np.isfinite(v)]
     if not valid_vals:
         raise RuntimeError("Complexity fidelity score could not be computed (all subscores NaN).")
@@ -522,14 +529,15 @@ def compute_complexity_fidelity_score(
     denom = sum(weights[k] for k, v in valid_vals)
     score = numer / denom
 
-    # Pretty print
+    # Printing
     print(f"Complexity Fidelity Score: {score:0.2f}")
-    for k in ['dcca','mfdfa','mfdcca','sampen','permen','lzc']:
+    for k in ['dcca', 'mfdfa', 'mfdcca', 'sampen', 'permen', 'lzc']:
         v = subscores[k]
         vs = "nan" if not np.isfinite(v) else f"{v:0.2f}"
         print(f"  {k.upper():7s}: {vs}")
 
     return score
+
 
 
 
@@ -579,17 +587,20 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     """
     Computes a composite diversity score between real and synthetic EEG datasets.
 
-    Nine normalised sub-metrics are averaged (or linearly combined via ``weights``):
+    Twelve normalised sub-metrics are averaged (or linearly combined via ``weights``):
 
-        1.  C_cov        – Gaussian-weighted coverage                    ↑ good
-        2.  O_out        – Gaussian-weighted outlier goodness            ↑ good
-        3.  S_PCA        – silhouette coefficient in PCA space           ↑ good
-        4.  S_UM         – silhouette coefficient in UMAP space          ↑ good
-        5.  D_PCA        – centroid overlap score in PCA space           ↑ good
-        6.  D_UM         – centroid overlap score in UMAP space          ↑ good
-        7.  U_NN         – Uniqueness (NN ratio, syn/real, normalized)   ↑ good
-        8.  L_loc        – Local diversity (P50 NN ratio, normalized)    ↑ good
-        9.  G_glob       – Global diversity (pairwise ratio, normalized) ↑ good
+        1.  C_cov          – Coverage (real→synth, NN within radius)                 ↑ good
+        2.  O_out          – Outlier Goodness (synth→real, NN within radius)        ↑ good
+        3.  LM_PCA         – Label Mixing Score in PCA space                         ↑ good
+        4.  LM_UM          – Label Mixing Score in UMAP space                        ↑ good
+        5.  D_PCA          – Mahalanobis centroid overlap in PCA space               ↑ good
+        6.  D_UM           – Mahalanobis centroid overlap in UMAP space              ↑ good
+        7.  CS_PCA         – Covariance shape similarity in PCA space                ↑ good
+        8.  CS_UM          – Covariance shape similarity in UMAP space               ↑ good
+        9.  U_NN           – Uniqueness (NN distance ratio, syn/real, normalized)    ↑ good
+        10. G_glob         – Global diversity (pairwise ratio, syn/real, normalized) ↑ good
+        11. L_loc_P10      – Local diversity P10 (NN ratio, syn/real, normalized)    ↑ good
+        12. L_loc_P50      – Local diversity P50 (NN ratio, syn/real, normalized)    ↑ good
 
     Parameters
     ----------
@@ -599,18 +610,15 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
         Shape (n_samples, n_features).
     weights : dict, optional
         Dictionary with keys:
-        ['coverage','outliers','pca_compactness','umap_compactness',
-         'pca_overlap','umap_overlap','uniqueness','local_div','global_div'].
-        Defaults to equal weights (1/9 each).
+        ['coverage','outliers',
+         'pca_labelmix','umap_labelmix',
+         'pca_overlap','umap_overlap',
+         'pca_covshape','umap_covshape',
+         'uniqueness','global_div',
+         'local_div_p10','local_div_p50'].
+        Defaults to equal weights (1/12 each).
     n_components : int, optional
         Dimensionality of PCA / UMAP (default = 2).
-
-    Example Usage:
-    --------------
-    real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
-    synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
-
-    evaluation_score.compute_diversity_score(real_data, synthetic_data)
 
     Returns
     -------
@@ -631,155 +639,179 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     m_geom = div.compute_geometric_diversity(real_data, synthetic_data)
     m_intr = div.compute_intrinsic_diversity(real_data, synthetic_data)
 
-    # Transform each metric to a [0,1] similarity scale (higher=better)
-    C_cov = m_cov['Coverage']           # already [0,1]
-    O_out = m_cov['Outliers']           # already [0,1]
-    S_PCA = m_geom['PCA_Compactness']    # already [0,1]
-    S_UM  = m_geom['UMAP_Compactness']   # already [0,1]
-    D_PCA = m_geom['PCA_OverlapMahalanobis']     # already [0,1] (overlap score)
-    D_UM  = m_geom['UMAP_OverlapMahalanobis']    # already [0,1]
+    # 1) Coverage / Outliers (already in [0,1])
+    C_cov = m_cov['Coverage']
+    O_out = m_cov['Outliers']
 
-    # Normalize intrinsic diversity ratios (symmetrically centered at 1)
-    U_NN   = normalize_ratio(m_intr['Uniqueness_NN'])
-    L_loc  = normalize_ratio(m_intr['Local_Diversity_P50'])
-    G_glob = normalize_ratio(m_intr['Global_Diversity'])
+    # 2) Geometric diversity (already in [0,1] or (0,1])
+    LM_PCA = m_geom['PCA_LabelMixingScore']
+    LM_UM  = m_geom['UMAP_LabelMixingScore']
+    D_PCA  = m_geom['PCA_OverlapMahalanobis']
+    D_UM   = m_geom['UMAP_OverlapMahalanobis']
+    CS_PCA = m_geom['PCA_CovShape']
+    CS_UM  = m_geom['UMAP_CovShape']
+
+    # 3) Intrinsic diversity ratios (symmetrically normalised around ratio=1)
+    U_NN       = normalize_ratio(m_intr['Uniqueness_NN'])
+    G_glob     = normalize_ratio(m_intr['Global_Diversity'])
+    L_loc_P10  = normalize_ratio(m_intr['Local_Diversity_P10'])
+    L_loc_P50  = normalize_ratio(m_intr['Local_Diversity_P50'])
 
     # Default weights (equal importance)
     if weights is None:
         weights = {
-            'coverage'         : 1/9,
-            'outliers'         : 1/9,
-            'pca_compactness'  : 1/9,
-            'umap_compactness' : 1/9,
-            'pca_overlap'      : 1/9,
-            'umap_overlap'     : 1/9,
-            'uniqueness'       : 1/9,
-            'local_div'        : 1/9,
-            'global_div'       : 1/9,
+            'coverage'       : 1/12,
+            'outliers'       : 1/12,
+            'pca_labelmix'   : 1/12,
+            'umap_labelmix'  : 1/12,
+            'pca_overlap'    : 1/12,
+            'umap_overlap'   : 1/12,
+            'pca_covshape'   : 1/12,
+            'umap_covshape'  : 1/12,
+            'uniqueness'     : 1/12,
+            'global_div'     : 1/12,
+            'local_div_p10'  : 1/12,
+            'local_div_p50'  : 1/12,
         }
 
     # Weighted composite score
     diversity_score = (
-        weights['coverage']        * C_cov +
-        weights['outliers']        * O_out +
-        weights['pca_compactness'] * S_PCA +
-        weights['umap_compactness']* S_UM  +
-        weights['pca_overlap']     * D_PCA +
-        weights['umap_overlap']    * D_UM  +
-        weights['uniqueness']      * U_NN  +
-        weights['local_div']       * L_loc +
-        weights['global_div']      * G_glob
+        weights['coverage']      * C_cov      +
+        weights['outliers']      * O_out      +
+        weights['pca_labelmix']  * LM_PCA     +
+        weights['umap_labelmix'] * LM_UM      +
+        weights['pca_overlap']   * D_PCA      +
+        weights['umap_overlap']  * D_UM       +
+        weights['pca_covshape']  * CS_PCA     +
+        weights['umap_covshape'] * CS_UM      +
+        weights['uniqueness']    * U_NN       +
+        weights['global_div']    * G_glob     +
+        weights['local_div_p10'] * L_loc_P10  +
+        weights['local_div_p50'] * L_loc_P50
     )
 
     # Metrics printout
     print(f"Diversity Score: {diversity_score:.3f}")
     print(f"Coverage: {C_cov:.3f}")
     print(f"Outlier Goodness: {O_out:.3f}")
-    print(f"PCA Compactness: {S_PCA:.3f}")
-    print(f"UMAP Compactness: {S_UM:.3f}")
-    print(f"PCA Overlap: {D_PCA:.3f}")
-    print(f"UMAP Overlap: {D_UM:.3f}")
-    print(f"Uniqueness: {U_NN:.3f}")
-    print(f"Local Diversity: {L_loc:.3f}")
-    print(f"Global Diversity: {G_glob:.3f}")
-
+    print(f"PCA Label Mixing Score: {LM_PCA:.3f}")
+    print(f"UMAP Label Mixing Score: {LM_UM:.3f}")
+    print(f"PCA Overlap (Mahalanobis): {D_PCA:.3f}")
+    print(f"UMAP Overlap (Mahalanobis): {D_UM:.3f}")
+    print(f"PCA Covariance Shape Similarity: {CS_PCA:.3f}")
+    print(f"UMAP Covariance Shape Similarity: {CS_UM:.3f}")
+    print(f"Uniqueness (NN ratio, normalized): {U_NN:.3f}")
+    print(f"Global Diversity (pairwise ratio, normalized): {G_glob:.3f}")
+    print(f"Local Diversity P10 (NN ratio, normalized): {L_loc_P10:.3f}")
+    print(f"Local Diversity P50 (NN ratio, normalized): {L_loc_P50:.3f}")
 
     return diversity_score
 
 
 
-def compute_privacy_score(real_data, synthetic_data, weights: dict | None = None):
+
+def compute_privacy_score(
+    real_data,
+    synthetic_data,
+    y_real: np.ndarray | None = None,
+    *,
+    normalize: str | None = "zscore_global",
+    length_normalize: bool = True,
+    weights: dict | None = None,
+) -> tuple[float, dict]:
     """
-    Computes a composite **privacy score** between real and synthetic EEG datasets.
+    Composite privacy score in [0, 1]; higher = safer.
 
-    Four sub-metrics are averaged (or linearly combined via `weights`):
+    Components (all mapped to [0,1] safety scores):
 
-        1.  WD / (1 + WD)   – Wasserstein distance (↑ distance ⇒ ↑ privacy)
-        2.  ED / (1 + ED)   – Euclidean histogram distance (↑ distance ⇒ ↑ privacy)
-        3.  JSD             – Jensen–Shannon divergence (↑ divergence ⇒ ↑ privacy)
-        4.  1 − MIR_acc     – Membership inference attack accuracy inverted (↑ privacy)
-
-    Parameters
-    ----------
-    real_data : np.ndarray | list
-        Real signals; each sample will be flattened then histogram-binned.
-    synthetic_data : np.ndarray | list
-        Synthetic signals processed in the same way.
-    weights : dict, optional
-        Custom weights for the metrics; keys must include
-        'wd', 'ed', 'jsd', 'mir'.
-        Values are automatically re-normalised to sum 1.
-
-    Returns
-    -------
-    float
-        Privacy score in [0, 1]; higher = safer.
+      - L2 effect size d_L2      (from NN distances, R–S vs R–R)
+      - Cosine effect size d_COS (same)
+      - DTW effect size d_DTW    (same)
+      - Optional: MIR (1 - attack accuracy),
+        if y_real (labels) is provided.
     """
-
     pr = Privacy()
 
-    # Calculate global distances
-    dists = pr.compute_privacy_metrics(real_data, synthetic_data)
 
-    # Convert to [0,1] scores (larger = safer)
+    # 1) Distance-based effect sizes (Cohen-style)
+
+    eff = pr.compute_distance_effect_sizes(
+        real_data,
+        synthetic_data,
+        normalize=normalize,
+        length_normalize=length_normalize,
+    )
+
+    d_l2  = eff["l2"]["effect_size_d"]
+    d_cos = eff["cos"]["effect_size_d"]
+    d_dtw = eff["dtw"]["effect_size_d"]
+
+    def effect_size_to_safety(d: float,
+                              low: float = 0.0,
+                              high: float = 0.8) -> float:
+        """Map effect size d to [0,1] safety."""
+        if np.isnan(d):
+            return np.nan
+        if d <= low:
+            return 0.0
+        if d >= high:
+            return 1.0
+        return float((d - low) / (high - low))
+
     scores = {
-        "wd": dists["wd"] / (1.0 + dists["wd"]),
-        "ed": dists["ed"] / (1.0 + dists["ed"]),
-        "jsd": dists["jsd"],  # already in [0,1]
+        "l2":  effect_size_to_safety(d_l2),
+        "cosine": effect_size_to_safety(d_cos),
+        "dtw": effect_size_to_safety(d_dtw),
     }
 
-    # Compute MIR metric
-    X_real = np.stack(real_data)
-    X_synth = np.stack(synthetic_data)
-    num_samples = len(X_real)
-    half = num_samples // 2
-    y_real = np.array([0] * half + [1] * (num_samples - half))
-    np.random.shuffle(y_real)
+    # 2) Optional MIR component (requires true labels)
 
-    mir_metrics = pr.compute_privacy_metrics(
-        real_data, synthetic_data,
-        X_real=X_real, y_real=y_real, X_synth=X_synth,
-        use_new_mir=False
-    )
-    # Try a set of keys from both legacy and black-box styles
-    candidate_keys = [
-        "confidence_attack_acc", "mir_conf_acc",
-        "attack_acc", "mia_acc",  # generic fallbacks if you ever add them
-    ]
-    attack_acc = None
-    for k in candidate_keys:
-        if k in mir_metrics and mir_metrics[k] is not None:
-            attack_acc = float(mir_metrics[k])
-            break
-
-    if attack_acc is None or np.isnan(attack_acc):
-        # Prefer to fail loudly rather than pretend privacy is perfect
-        available = ", ".join(mir_metrics.keys())
-        raise ValueError(
-            f"MIR attack accuracy not found. Looked for {candidate_keys}. "
-            f"Available keys: {available}"
+    scores["mir"] = None
+    if y_real is not None:
+        mir = pr.compute_mir_metrics(
+            real_data,
+            synthetic_data,
+            y_real=y_real,
+            normalize=normalize,
+            verbose=False,
         )
 
-    # Map accuracy → privacy score:
-    #   0.5 (random) → 1.0 (best privacy)
-    #   1.0 (perfect attack) → 0.0 (worst privacy)
-    #   <0.5 treated as random (cap at 0.5)
-    attack_acc = max(0.5, min(1.0, attack_acc))
-    scores["mir"] = 2.0 * (1.0 - attack_acc)
+        # You could also take max / mean of all attacks here
+        attack_acc = float(mir["confidence_attack_acc"])
+        attack_acc = max(0.5, min(1.0, attack_acc))  # clip to [0.5,1]
+        scores["mir"] = 2.0 * (1.0 - attack_acc)
+
 
     # 3) Weights + aggregate
-    base_w = {"wd": 0.25, "ed": 0.25, "jsd": 0.25, "mir": 0.25}
+
+    base_w = {
+        "l2": 1.0,
+        "cosine": 1.0,
+        "dtw": 1.0,
+        "mir": (1.0 if scores["mir"] is not None else 0.0),
+    }
+
     if weights is not None:
         base_w.update(weights)
+
+    # Remove MIR weight if MIR is None
+    if scores["mir"] is None:
+        base_w.pop("mir", None)
+
+    # Normalise weights
     tot = sum(base_w.values())
     base_w = {k: v / tot for k, v in base_w.items()}
 
-    privacy_score = sum(base_w[k] * scores[k] for k in scores)
+    # Aggregate privacy score
+    privacy_score = sum(base_w[k] * scores[k] for k in base_w)
 
-    print(f"Privacy Score: {privacy_score:.2f}")
-    print(f"  - WD Score:  {scores['wd']:.2f}")
-    print(f"  - ED Score:  {scores['ed']:.2f}")
-    print(f"  - JSD Score: {scores['jsd']:.2f}")
-    print(f"  - MIR Score: {scores['mir']:.2f}")
+    print(f"Privacy Score (0–1, higher = safer): {privacy_score:.2f}")
+    print(f"  - L2 safety score     : {scores['l2']:.2f} (from d_L2 = {d_l2:.2f})")
+    print(f"  - Cosine safety score : {scores['cosine']:.2f} (from d_COS = {d_cos:.2f})")
+    print(f"  - DTW safety score    : {scores['dtw']:.2f} (from d_DTW = {d_dtw:.2f})")
+    if scores["mir"] is not None:
+        print(f"  - MIR safety score    : {scores['mir']:.2f}")
+    else:
+        print("  - MIR safety score    : n/a (labels not provided)")
 
-    return privacy_score
+    return privacy_score, scores
