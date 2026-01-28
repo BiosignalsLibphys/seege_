@@ -11,47 +11,6 @@ def _sim(a, b, eps=1e-12):
     """Normalised absolute-difference similarity in [0,1]."""
     return 1.0 - np.abs(a - b) / (np.abs(a) + np.abs(b) + eps)
 
-def compute_amplitude_fidelity_score(real_data, synthetic_data, fs, *,
-                                       mode: str = "all_vs_all",
-                                       nperseg: int = 256):
-    """
-    Computes the Feature Selective Validation (FSV) similarity score
-    between real and synthetic signals using the AmplitudeFidelity class.
-
-    Parameters
-    ----------
-    real_data : np.ndarray
-        Real signal data. Can be 1D (single signal) or 2D (multiple signals).
-    synthetic_data : np.ndarray
-        Synthetic signal data. Can be 1D (single signal) or 2D (multiple signals).
-    fs : int
-        Sampling frequency of the signals.
-    mode : {"zip", "all_vs_all"}, default="all_vs_all"
-        Pairing strategy used when both inputs are 2D.
-    nperseg : int, default=256
-        Segment length used for Welch PSD computation.
-
-
-    Example Usage:
-    --------------
-    real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
-    synthetic_data = np.random.randn(10, 2048) # 10 synthetic signals, each 2048 samples
-
-    evaluation_score.compute_amplitude_fidelity_score(real_data, synthetic_data, fs=2048)
-    evaluation_score.compute_amplitude_fidelity_score(real_data[0], synthetic_data[0], fs=2048)
-
-    Returns
-    -------
-    float
-        Mean FSV fidelity score.
-    """
-    fsv = AmplitudeFidelity(fs)
-    metrics = fsv.compute_amplitude_metrics(real_data, synthetic_data,mode=mode, nperseg=nperseg)
-
-    print("Amplitude Fidelity Score: {:.2f}".format(metrics["Similarity"]))
-
-    return metrics["Similarity"]
-
 def compute_time_fidelity_score(real_data, synthetic_data, weights=None):
     """
    Compute a time-domain fidelity score between real and synthetic signals
