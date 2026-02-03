@@ -125,32 +125,98 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
     float
         Composite frequency-domain fidelity score in the range (0, 1].
     """
+
+    # Helper: robust scalar casting
+    def _as_float(x, default=np.nan):
+        """
+        Best-effort conversion of metric outputs (float/array/dict) into a scalar float.
+        """
+        if isinstance(x, (int, float, np.floating)):
+            return float(x)
+
+        if isinstance(x, np.generic):
+            return float(x)
+
+        if isinstance(x, (list, tuple, np.ndarray)):
+            arr = np.asarray(x, dtype=float)
+            if arr.size == 0:
+                return float(default)
+            return float(np.nanmean(arr))
+
+        if isinstance(x, dict):
+            # Try common summary paths used across your metric API
+            candidates = [
+                ("RS Summary", "Global Mean"),
+                ("RS Summary", "Mean"),
+                ("Summary", "Global Mean"),
+                ("Summary", "Mean"),
+                ("Global Mean",),
+                ("Mean",),
+                ("wd",),
+                ("WD",),
+                ("distance",),
+                ("value",),
+            ]
+            for path in candidates:
+                v = x
+                ok = True
+                for k in path:
+                    if isinstance(v, dict) and k in v:
+                        v = v[k]
+                    else:
+                        ok = False
+                        break
+                if ok:
+                    return _as_float(v, default=default)
+            return float(default)
+
+        try:
+            return float(x)
+        except Exception:
+            return float(default)
+
+
     # Default values definition
 
     analysis_band = (0.5, 500.0)  # Hz
-    win_seconds = 4.0  # Welch window length (s)
+    win_seconds = 4.0            # Welch window length (s)
     window = 'hann'
     detrend = 'constant'
-    overlap = 0.5  # 50%
+    overlap = 0.5                # 50%
+
+    # Keep analysis band under Nyquist
+    nyq = fs / 2.0
+    analysis_band = (analysis_band[0], min(analysis_band[1], nyq))
 
     # Initialize FrequencyFidelity class
-    frequency_fidelity = FrequencyFidelity(fs,
-                 analysis_band=analysis_band,
-                 win_seconds=win_seconds,
-                 window=window,
-                 detrend=detrend,
-                 overlap=overlap)
+    frequency_fidelity = FrequencyFidelity(
+        fs,
+        analysis_band=analysis_band,
+        win_seconds=win_seconds,
+        window=window,
+        detrend=detrend,
+        overlap=overlap
+    )
+
 
     # Weights
     if weights is None:
-        weights = {'relative': 0.40,
-                   'dom_freq': 0.20,
-                   'psd_coherence': 0.20,
-                   'wasserstein': 0.20}
+        weights = {
+            'relative': 0.40,
+            'dom_freq': 0.20,
+            'psd_coherence': 0.20,
+            'wasserstein': 0.20
+        }
 
     # Fallback – add any missing keys with zero weight
     for k in ('relative', 'dom_freq', 'psd_coherence', 'wasserstein'):
         weights.setdefault(k, 0.0)
+
+    # Optionally normalize weights to sum to 1 (prevents accidental scaling)
+    wsum = float(sum(weights.values()))
+    if wsum > 0:
+        weights = {k: float(v) / wsum for k, v in weights.items()}
+
 
     # Shape handling
     if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
@@ -158,61 +224,92 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
     if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
         synthetic_data = [synthetic_data]
 
+
     # 1) Relative power
-    freqs_r, psd_r, rel_power_r, dominant_freq_r = \
-        frequency_fidelity.compute_relative_power(real_data, analysis_band=analysis_band,
-                 win_seconds=win_seconds,
-                 window=window,
-                 detrend=detrend,
-                 overlap=overlap)
-    freqs_s, psd_s, rel_power_s, dominant_freq_s = \
-        frequency_fidelity.compute_relative_power(synthetic_data,analysis_band=analysis_band,
-                 win_seconds=win_seconds,
-                 window=window,
-                 detrend=detrend,
-                 overlap=overlap)
+    freqs_r, psd_r, rel_power_r, dominant_freq_r = frequency_fidelity.compute_relative_power(
+        real_data,
+        analysis_band=analysis_band,
+        win_seconds=win_seconds,
+        window=window,
+        detrend=detrend,
+        overlap=overlap
+    )
+    freqs_s, psd_s, rel_power_s, dominant_freq_s = frequency_fidelity.compute_relative_power(
+        synthetic_data,
+        analysis_band=analysis_band,
+        win_seconds=win_seconds,
+        window=window,
+        detrend=detrend,
+        overlap=overlap
+    )
 
     band_names = ["Delta", "Theta", "Alpha", "Beta", "Gamma"]
-    real_mean_rel_power = np.array([np.nanmean(rel_power_r[b]) for b in band_names])
-    synth_mean_rel_power = np.array([np.nanmean(rel_power_s[b]) for b in band_names])
-    mean_band_diff = np.nanmean(np.abs(real_mean_rel_power - synth_mean_rel_power) * 100)  # %
+    real_mean_rel_power = np.array([np.nanmean(rel_power_r[b]) for b in band_names], dtype=float)
+    synth_mean_rel_power = np.array([np.nanmean(rel_power_s[b]) for b in band_names], dtype=float)
+
+    mean_band_diff = np.nanmean(np.abs(real_mean_rel_power - synth_mean_rel_power) * 100.0)  # %
     # Map diff → similarity (clipped ≥ 0.2 to avoid 0 in extreme cases)
     relative_power_score = max(0.2, 1.0 - mean_band_diff / 20.0)
+    relative_power_score = float(np.clip(relative_power_score, 0.0, 1.0))
+
 
     # 2) Dominant frequency
     freq_diff = abs(np.nanmean(dominant_freq_r) - np.nanmean(dominant_freq_s))
     dominant_freq_score = max(0.2, 1.0 - freq_diff / 3.0)
+    dominant_freq_score = float(np.clip(dominant_freq_score, 0.0, 1.0))
 
     # 3) Coherence
     coh = frequency_fidelity.spectral_coherence(
         real_data, synthetic_data,
-        mode="all_vs_all", per_band=False,
-        analysis_band=analysis_band, win_seconds=2.0,
-        window=window, detrend=detrend, overlap=overlap
+        mode="all_vs_all",
+        per_band=False,
+        analysis_band=analysis_band,
+        win_seconds=2.0,
+        window=window,
+        detrend=detrend,
+        overlap=overlap
     )
-    mean_coherence = float(coh["RS Summary"]["Global Mean"]) if np.isfinite(coh["RS Summary"]["Global Mean"]) else 0.0
-    mean_coherence = float(np.clip(mean_coherence, 0.0, 1.0))
+
+    # Robustly extract and validate coherence scalar
+    coh_val = coh.get("RS Summary", {}).get("Global Mean", np.nan) if isinstance(coh, dict) else np.nan
+    coh_val = _as_float(coh_val, default=np.nan)
+
+    mean_coherence = 0.0
+    if np.isfinite(coh_val):
+        mean_coherence = float(np.clip(coh_val, 0.0, 1.0))
 
     # 4) Spectral Wasserstein distance
-    wd_psd = frequency_fidelity.spectral_wasserstein_distance(
+    wd_psd_raw = frequency_fidelity.spectral_wasserstein_distance(
         real_data, synthetic_data,
         fmin=analysis_band[0],
         fmax=analysis_band[1],
         mode="pairmean",
         per_band=False
     )
-    wasserstein_score = 1.0 / (1.0 + wd_psd) if np.isfinite(wd_psd) else 0.2
+
+    # Robustly extract scalar WD
+    wd_psd = _as_float(wd_psd_raw, default=np.nan)
+
+    # Map distance → similarity
+    wasserstein_score = 0.2
+    if np.isfinite(wd_psd):
+        wasserstein_score = float(1.0 / (1.0 + wd_psd))
+        wasserstein_score = float(np.clip(wasserstein_score, 0.0, 1.0))
 
     # Composite score
     frequency_fidelity_score = (
-        weights['relative']      * relative_power_score  +
-        weights['dom_freq']      * dominant_freq_score   +
-        weights['psd_coherence'] * mean_coherence        +
+        weights['relative']      * relative_power_score +
+        weights['dom_freq']      * dominant_freq_score +
+        weights['psd_coherence'] * mean_coherence +
         weights['wasserstein']   * wasserstein_score
     )
 
+    frequency_fidelity_score = float(np.clip(frequency_fidelity_score, 0.0, 1.0))
+
     print(f"Frequency Fidelity Score: {frequency_fidelity_score:.2f}")
-    #return frequency_fidelity_score
+
+    return frequency_fidelity_score
+
 
 
 def compute_time_frequency_fidelity_score(real_data, synthetic_data, fs, *, weights=None, mode: str = "auto",
@@ -526,7 +623,6 @@ def compute_fidelity_score(real_data, synthetic_data, fs):
 
     evaluation_score.compute_fidelity_score(real_data, synthetic_data, fs=2048)
     """
-    amp_sim = compute_amplitude_fidelity_score(real_data, synthetic_data, fs)
     time_sim = compute_time_fidelity_score(real_data, synthetic_data)
     freq_sim = compute_frequency_fidelity_score(real_data, synthetic_data, fs)
     scalogram_sim = compute_time_frequency_fidelity_score(real_data, synthetic_data, fs)
@@ -683,7 +779,6 @@ def compute_privacy_score(
     Components (all mapped to [0,1] safety scores):
 
       - L2 effect size d_L2      (from NN distances, R–S vs R–R)
-      - Cosine effect size d_COS (same)
       - DTW effect size d_DTW    (same)
       - Optional: MIR (1 - attack accuracy),
         if y_real (labels) is provided.
@@ -701,7 +796,6 @@ def compute_privacy_score(
     )
 
     d_l2  = eff["l2"]["effect_size_d"]
-    d_cos = eff["cos"]["effect_size_d"]
     d_dtw = eff["dtw"]["effect_size_d"]
 
     def effect_size_to_safety(d: float,
@@ -718,7 +812,6 @@ def compute_privacy_score(
 
     scores = {
         "l2":  effect_size_to_safety(d_l2),
-        "cosine": effect_size_to_safety(d_cos),
         "dtw": effect_size_to_safety(d_dtw),
     }
 
@@ -744,7 +837,6 @@ def compute_privacy_score(
 
     base_w = {
         "l2": 1.0,
-        "cosine": 1.0,
         "dtw": 1.0,
         "mir": (1.0 if scores["mir"] is not None else 0.0),
     }
@@ -765,7 +857,6 @@ def compute_privacy_score(
 
     print(f"Privacy Score (0–1, higher = safer): {privacy_score:.2f}")
     print(f"  - L2 safety score     : {scores['l2']:.2f} (from d_L2 = {d_l2:.2f})")
-    print(f"  - Cosine safety score : {scores['cosine']:.2f} (from d_COS = {d_cos:.2f})")
     print(f"  - DTW safety score    : {scores['dtw']:.2f} (from d_DTW = {d_dtw:.2f})")
     if scores["mir"] is not None:
         print(f"  - MIR safety score    : {scores['mir']:.2f}")
