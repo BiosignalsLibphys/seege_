@@ -132,10 +132,37 @@ class ComplexityFidelity:
         else:
             raise ValueError("Invalid method. Choose 'DCCA', 'MFDFA' or 'MFDCCA'")
 
+    def _finalize_axes(self, ax, created_fig: bool):
+        """Ensure tick label sizes and sensible spines for an axis."""
+        # enforce tick label sizes to match rcParams
+        ax.tick_params(axis='both', which='major',
+                       labelsize=mpl.rcParams.get('xtick.labelsize', 15))
+        ax.tick_params(axis='both', which='minor',
+                       labelsize=mpl.rcParams.get('xtick.labelsize', 15))
+
+        # keep left and bottom spines visible (common journal style),
+        # hide only top/right for a cleaner look
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(True)
+        ax.spines['bottom'].set_visible(True)
+
+        # ensure y-axis (ticks + label) are visible
+        ax.yaxis.set_visible(True)
+        # ensure x-axis visible too
+        ax.xaxis.set_visible(True)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+
     def plot_metrics(self):
         """
         Produce plots for the selected fractal analysis method.
         """
+        # Apply global style before creating subplots (so new figs pick it up)
+        self._set_plot_style()
+
         if self.method == 'DCCA':
             # 1 row × 2 columns: Hurst and rho
             fig, axs = plt.subplots(1, 2, figsize=(12, 5))
@@ -210,15 +237,8 @@ class ComplexityFidelity:
 
         ax.set_ylabel('Mean cross Hurst exponent ($\\overline{H}_{xy}$), $q \\in [-5, 5]$')
         ax.set_title(rf'{self.method} mean cross Hurst exponent $(\overline{{H}}_{{xy}})$')
-
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-
-        if created_fig:
-            plt.tight_layout()
-            plt.show()
+        # use helper to ensure ticks/spines/labels are correct
+        self._finalize_axes(ax, created_fig)
 
     def plot_rho_correlation(self, ax=None):
         """Bar plot of correlation coefficients (rho) for DCCA."""
@@ -255,15 +275,8 @@ class ComplexityFidelity:
 
         ax.set_ylabel(r'Mean correlation coefficients ($\bar{\rho}$)')
         ax.set_title(rf'{self.method} mean correlation coefficients ($\bar{{\rho}}$)')
-
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-
-        if created_fig:
-            plt.tight_layout()
-            plt.show()
+        # use helper to ensure ticks/spines/labels are correct
+        self._finalize_axes(ax, created_fig)
 
     def plot_p_correlation(self, ax=None):
         """Bar plot of the mean p(q) for MFDCCA cross-correlation if computed."""
@@ -297,14 +310,8 @@ class ComplexityFidelity:
         )
         ax.set_ylabel(r'Mean cross-correlation $\langle p(q)\rangle$, $q \in [-5, 5]$')
         ax.set_title(r'MFDCCA mean cross-correlation $\langle p(q)\rangle$')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-
-        if created_fig:
-            plt.tight_layout()
-            plt.show()
+        # use helper to ensure ticks/spines/labels are correct
+        self._finalize_axes(ax, created_fig)
 
     def plot_Fq_correlation(self, ax=None):
         """Bar plot of the mean Fxy(q) for MFDCCA cross-fluctuation if computed."""
@@ -338,14 +345,8 @@ class ComplexityFidelity:
         )
         ax.set_ylabel(r'Mean cross-fluctuation $\langle F_{xy}(q) \rangle$, $q \in [-5, 5]$')
         ax.set_title(r'MFDCCA mean cross-fluctuation $\langle F_{xy}(q) \rangle$')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-
-        if created_fig:
-            plt.tight_layout()
-            plt.show()
+        # use helper to ensure ticks/spines/labels are correct
+        self._finalize_axes(ax, created_fig)
 
     def plot_deltaAlpha(self, ax=None):
         """Bar plot of the multifractal spectrum width Δα."""
@@ -379,14 +380,8 @@ class ComplexityFidelity:
         )
         ax.set_ylabel(r'Spectrum width ($\Delta\alpha$), $q \in [-5, 5]$')
         ax.set_title('MFDCCA spectrum width (Δα)')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-
-        if created_fig:
-            plt.tight_layout()
-            plt.show()
+        # use helper to ensure ticks/spines/labels are correct
+        self._finalize_axes(ax, created_fig)
 
 
     # Helper methods
@@ -445,6 +440,12 @@ class ComplexityFidelity:
         """
         Perform Detrended Cross-Correlation Analysis (DCCA) between real and synthetic signals.
         """
+        def _mean_rho(arr):
+            """Safe mean for rho arrays that may be nested or contain NaNs."""
+            a = np.asarray(arr, dtype=float).ravel()
+            a = a[np.isfinite(a)]
+            return float(np.mean(a)) if a.size else np.nan
+
         pre_r = self._preprocess_signals(self.real_data)
         pre_s = self._preprocess_signals(self.synthetic_data)
 
@@ -511,7 +512,7 @@ class ComplexityFidelity:
                 H_rs.append(H)
 
                 rho = dcca.computeRho(wins, polOrd=1)
-                rho_rs.append(_mean_rho(rho[1]))
+                rho_rs.append(_mean_rho(rho[1] if len(rho) > 1 else rho))
 
         # fallback if empty
         if not H_rr: H_rr=[np.nan]; rho_rr=[np.nan]
