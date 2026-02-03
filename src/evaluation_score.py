@@ -598,7 +598,7 @@ def compute_complexity_fidelity_score(
 
 def compute_fidelity_score(real_data, synthetic_data, fs):
     """
-    Computes an overall fidelity score by averaging amplitude, time, frequency, time-frequency,
+    Computes an overall fidelity score by averaging time, frequency, time-frequency,
     and complexity fidelity scores.
 
     Parameters
@@ -628,9 +628,8 @@ def compute_fidelity_score(real_data, synthetic_data, fs):
     scalogram_sim = compute_time_frequency_fidelity_score(real_data, synthetic_data, fs)
     fractal_sim = compute_complexity_fidelity_score(real_data, synthetic_data)
 
-    fidelity_score = (amp_sim + time_sim + freq_sim + scalogram_sim + fractal_sim) / 5
+    fidelity_score = (time_sim + freq_sim + scalogram_sim + fractal_sim) / 5
     print(f"Fidelity Score: {fidelity_score:.2f}")
-    print(f"  - Amplitude Similarity Score: {amp_sim:.2f}")
     print(f"  - Time Similarity Score: {time_sim:.2f}")
     print(f"  - Frequency Similarity Score: {freq_sim:.2f}")
     print(f"  - Scalogram Similarity Score: {scalogram_sim:.2f}")
