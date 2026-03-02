@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import welch, savgol_filter, coherence
 from scipy.integrate import simps
-from scipy.stats import shapiro, ttest_rel, wilcoxon
-from scipy.stats import wasserstein_distance
+from scipy.stats import shapiro, ttest_rel, wilcoxon, wasserstein_distance, mannwhitneyu
+
 
 # Set Arial as the default font
 rcParams['font.family'] = 'Arial'
@@ -18,7 +18,7 @@ class FrequencyFidelity:
     dominant frequencies, and performs statistical comparisons (normality,
     paired t-test / Wilcoxon). It can also compute coherence and approximate
     a Wasserstein distance (standardized by real–real (RR) variability) in the frequency domain.
-
+    
     Example Usage:
     --------------
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
@@ -106,6 +106,33 @@ class FrequencyFidelity:
         dtr = self.detrend if detrend is None else detrend
         ovl = self.overlap if overlap is None else float(overlap)
         return fmin, fmax, win_s, wnd, dtr, ovl
+
+    def _cliffs_delta(self, x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        x = x[np.isfinite(x)]
+        y = y[np.isfinite(y)]
+        if x.size == 0 or y.size == 0:
+            return np.nan
+        # delta = P(x>y) - P(x<y)
+        gt = 0
+        lt = 0
+        for xi in x:
+            gt += np.sum(xi > y)
+            lt += np.sum(xi < y)
+        return (gt - lt) / (x.size * y.size)
+
+    def _mwu_rr_vs_rs(self, rr_vals, rs_vals):
+        rr = np.asarray(rr_vals, dtype=float)
+        rs = np.asarray(rs_vals, dtype=float)
+        rr = rr[np.isfinite(rr)]
+        rs = rs[np.isfinite(rs)]
+        if rr.size < 3 or rs.size < 3:
+            return {"p": np.nan, "cliffs_delta": np.nan, "test": "MWU"}
+        stat = mannwhitneyu(rr, rs, alternative="two-sided")
+        cd = self._cliffs_delta(rr, rs)
+        return {"p": float(stat.pvalue), "cliffs_delta": float(cd), "test": "MWU"}
+
 
     def _compute_psd(self, sig,
                      analysis_band=None, win_seconds=None, window=None, detrend=None, overlap=None):
@@ -322,7 +349,7 @@ class FrequencyFidelity:
 
     def spectral_coherence(self, real_signals, synthetic_signals, *, mode: str = "all_vs_all", rr_zip_strategy: str = "consecutive",
             ss_zip_strategy: str = "consecutive", per_band: bool = True, analysis_band=None, win_seconds = None, window = None,
-            detrend = None, overlap = None):
+            detrend = None, overlap = None,  pair_label: str = "RS"):
         """
         Compute spectral coherence between real and synthetic signals.
 
@@ -514,6 +541,8 @@ class FrequencyFidelity:
         rr_g_m, rr_g_sd = _mean_sd(rr_globals)
         ss_g_m, ss_g_sd = _mean_sd(ss_globals)
 
+        global_test = self._mwu_rr_vs_rs(rr_globals, rs_globals)
+
         def _summarize_bands(dicts_list):
             if not (per_band and bands_used) or len(dicts_list) == 0:
                 return {}
@@ -528,11 +557,17 @@ class FrequencyFidelity:
         ss_bands_mean = _summarize_bands(ss_bands_dicts)
         rs_bands_mean = _summarize_bands(rs_bands_dicts)
 
+        band_tests = {}
+        if per_band and bands_used and rr_bands_dicts and rs_bands_dicts:
+            for bname in bands_used.keys():
+                rr_b = [d.get(bname, np.nan) for d in rr_bands_dicts]
+                rs_b = [d.get(bname, np.nan) for d in rs_bands_dicts]
+                band_tests[bname] = self._mwu_rr_vs_rs(rr_b, rs_b)
+
         # Print (mirrors your concise style)
         def _fmt(x):
-            return "nan" if not np.isfinite(x) else f"{x:.3f}"
+            return "nan" if not np.isfinite(x) else f"{x:.6f}"
 
-        #print(f"Mode: {mode} | RS spectral coherence={_fmt(rs_g_m)} (± {_fmt(rs_g_sd)}) ({analysis_type})")
         print(f"Mode: {mode} ({analysis_type})")
         if mode == "zip":
             print(f"RR zip strategy: {rr_zip_strategy} | pairs={len(rr_globals)}")
@@ -542,13 +577,24 @@ class FrequencyFidelity:
         if per_band and bands_used:
             print("RR  | Bands mean:", {k: _fmt(v) for k, v in rr_bands_mean.items()})
 
+        print(f"{pair_label}  | Spectral coherence =", f"{_fmt(rs_g_m)} ± {_fmt(rs_g_sd)}")
+        if per_band and bands_used:
+            print(f"{pair_label}  | Bands mean:", {k: _fmt(v) for k, v in rs_bands_mean.items()})
+
+        p_val = global_test["p"]
+        if p_val == 0.0:
+            print(
+                f"RR vs {pair_label} MWU test: p < 1e-308 (underflow), Cliff's delta = {global_test['cliffs_delta']:.6f}")
+        else:
+            print(f"RR vs {pair_label} MWU test: p = {p_val:.30e}, Cliff's delta = {global_test['cliffs_delta']:.6f}")
+
+        if per_band and bands_used:
+            print(f"RR vs {pair_label} band tests:",
+                  {k: {"p": f"{v['p']:.6e}", "CliffΔ": f"{v['cliffs_delta']:.3f}"} for k, v in band_tests.items()})
+
         print("SS  | Spectral coherence =", f"{_fmt(ss_g_m)} ± {_fmt(ss_g_sd)}")
         if per_band and bands_used:
             print("SS  | Bands mean:", {k: _fmt(v) for k, v in ss_bands_mean.items()})
-
-        print("RS  | Spectral coherence =", f"{_fmt(rs_g_m)} ± {_fmt(rs_g_sd)}")
-        if per_band and bands_used:
-            print("RS  | Bands mean:", {k: _fmt(v) for k, v in rs_bands_mean.items()})
 
         # Return dict in your standard shape
         result = {
