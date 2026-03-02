@@ -276,10 +276,13 @@ class Privacy:
         real_data,
         synthetic_data,
         *,
-        normalize: str | None = "zscore_global",
+        normalize: str | None = None,
     ):
         """
         Nearest-neighbour cosine distance (1 − cosine similarity) on signals.
+
+        Note: Uses per-signal z-score normalization to preserve shape-independence
+        properties while allowing for Cohen's d effect size computation.
         """
         def cos_func(real_signal, synthetic_signal):
             return self._cosine_distance(real_signal, synthetic_signal)
