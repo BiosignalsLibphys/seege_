@@ -6,7 +6,7 @@ from scipy.signal import detrend
 import fathon
 from fathon import fathonUtils as fu
 import neurokit2 as nk
-from scipy.stats import wasserstein_distance
+from scipy.stats import wasserstein_distance, mannwhitneyu
 
 
 class ComplexityFidelity:
@@ -64,7 +64,7 @@ class ComplexityFidelity:
     * https://www.sciencedirect.com/science/article/pii/S2212017313006506
     """
 
-    def __init__(self, real_data, synthetic_data, method='DCCA', q_range=np.arange(-5,5,0.1), n_jobs=-1):
+    def __init__(self, real_data=None, synthetic_data=None, method='DCCA', q_range=np.arange(-5,5,0.1), n_jobs=-1):
         """
         Initializes the ComplexityFidelity class with real and synthetic signal data.
 
@@ -427,11 +427,94 @@ class ComplexityFidelity:
                 print("\nDCCA Cross-Correlation Coefficient (ρ) :")
                 for cat, m, s in zip(self.categories, self.rho_means, self.rho_stds):
                     print(f"  {cat}: {m:.4f} ± {s:.4f}")
+
+                    # RR/RS/SS distributions + RR vs RS tests
+            if hasattr(self, "_dcca_raw"):
+                print("\n=== DCCA RR / RS / SS distributions + RR vs RS tests ===")
+                self._print_rr_rs_ss_with_test("DCCA Hxy", self._dcca_raw["H_rr"], self._dcca_raw["H_rs"],
+                                                self._dcca_raw["H_ss"])
+                self._print_rr_rs_ss_with_test("DCCA rho", self._dcca_raw["rho_rr"], self._dcca_raw["rho_rs"],
+                                                self._dcca_raw["rho_ss"])
             return
 
         print(f"\n{self.method} Hurst Exponent:")
         for category, mean_val, std_val in zip(self.categories, self.means, self.stds):
             print(f"  {category}: Mean = {mean_val:.4f}, Std = {std_val:.4f}")
+
+        if self.method == "MFDCCA" and hasattr(self, "_mfdcca_raw"):
+            print("\n=== MFDCCA RR / RS / SS distributions + RR vs RS tests ===")
+            self._print_rr_rs_ss_with_test("MFDCCA mean H(q)", self._mfdcca_raw["H_rr"], self._mfdcca_raw["H_rs"],
+                                            self._mfdcca_raw["H_ss"])
+            self._print_rr_rs_ss_with_test("MFDCCA mean Fxy(q)", self._mfdcca_raw["Fq_rr"],
+                                            self._mfdcca_raw["Fq_rs"], self._mfdcca_raw["Fq_ss"])
+            self._print_rr_rs_ss_with_test("MFDCCA Δα", self._mfdcca_raw["Da_rr"], self._mfdcca_raw["Da_rs"],
+                                            self._mfdcca_raw["Da_ss"])
+            self._print_rr_rs_ss_with_test("MFDCCA mean p(q)", self._mfdcca_raw["p_rr"], self._mfdcca_raw["p_rs"],
+                                            self._mfdcca_raw["p_ss"])
+
+
+    # Stats helpers: summaries + tests
+
+    @staticmethod
+    def _finite(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, float).ravel()
+        return x[np.isfinite(x)]
+
+    @staticmethod
+    def _dist_summary(x: np.ndarray) -> dict:
+        x = ComplexityFidelity._finite(x)
+        if x.size == 0:
+            return {"n": 0, "mean": np.nan, "sd": np.nan, "median": np.nan, "q1": np.nan, "q3": np.nan}
+        return {
+            "n": int(x.size),
+            "mean": float(np.mean(x)),
+            "sd": float(np.std(x)),
+            "median": float(np.median(x)),
+            "q1": float(np.percentile(x, 25)),
+            "q3": float(np.percentile(x, 75)),
+        }
+
+    @staticmethod
+    def _mw_p_and_cliffs_delta(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+        """
+        Mann–Whitney U two-sided p-value + Cliff's delta effect size.
+        Cliff's delta in [-1, 1], with 0 meaning complete overlap.
+        delta = 2*AUC - 1, where AUC = U/(n_x*n_y).
+        """
+        x = ComplexityFidelity._finite(x)
+        y = ComplexityFidelity._finite(y)
+        if x.size == 0 or y.size == 0:
+            return np.nan, np.nan
+
+        # MWU; scipy returns U for x vs y
+        res = mannwhitneyu(x, y, alternative="two-sided")
+        U = float(res.statistic)
+        p = float(res.pvalue)
+
+        auc = U / (x.size * y.size)
+        delta = 2.0 * auc - 1.0
+        return p, float(delta)
+
+    @staticmethod
+    def _print_rr_rs_ss_with_test(name: str, rr: np.ndarray, rs: np.ndarray, ss: np.ndarray):
+        rr_s = ComplexityFidelity._dist_summary(rr)
+        rs_s = ComplexityFidelity._dist_summary(rs)
+        ss_s = ComplexityFidelity._dist_summary(ss)
+        p, delta = ComplexityFidelity._mw_p_and_cliffs_delta(rr, rs)
+
+        def _fmt_summary(s):
+            if s["n"] == 0:
+                return "n=0"
+            return f"n={s['n']}, mean={s['mean']:.4g}±{s['sd']:.4g}, median={s['median']:.4g} [{s['q1']:.4g}, {s['q3']:.4g}]"
+
+        def _fmt(x):
+            return "nan" if not np.isfinite(x) else f"{x:.4g}"
+
+        print(f"\n--- {name} ---")
+        print("  RR:", _fmt_summary(rr_s))
+        print("  RS:", _fmt_summary(rs_s))
+        print("  SS:", _fmt_summary(ss_s))
+        print(f"  RR vs RS: p={_fmt(p)}, Cliff's δ={_fmt(delta)}")
 
 
     # DCCA
@@ -525,6 +608,16 @@ class ComplexityFidelity:
         self.rho_means = [np.nanmean(rho_rr), np.nanmean(rho_rs), np.nanmean(rho_ss)]
         self.rho_stds  = [np.nanstd(rho_rr), np.nanstd(rho_rs), np.nanstd(rho_ss)]
 
+        # store raw distributions for later reporting
+        self._dcca_raw = {
+            "H_rr": np.asarray(H_rr, float),
+            "H_rs": np.asarray(H_rs, float),
+            "H_ss": np.asarray(H_ss, float),
+            "rho_rr": np.asarray(rho_rr, float),
+            "rho_rs": np.asarray(rho_rs, float),
+            "rho_ss": np.asarray(rho_ss, float),
+        }
+
 
     # MFDFA
 
@@ -556,6 +649,17 @@ class ComplexityFidelity:
         self.stds  = [np.nanstd(H_r),  np.nanstd(H_s)]
         # For MFDFA, we only have two categories, so override:
         self.categories = ['real','synthetic']
+
+        # store raw (no RR/RS/SS here; only real vs synthetic)
+        self._mfdfa_raw = {
+            "H_real": np.asarray(H_r, float),
+            "H_synth": np.asarray(H_s, float),
+        }
+
+        # optional print (if you want it immediately)
+        p, delta = self._mw_p_and_cliffs_delta(self._mfdfa_raw["H_real"], self._mfdfa_raw["H_synth"])
+        print("\n=== MFDFA Real vs Synthetic test ===")
+        print(f"  p={p:.4g} , Cliff's δ={delta:.4g}")
 
 
     # MFDCCA
@@ -689,6 +793,21 @@ class ComplexityFidelity:
 
         self.p_means = [np.nanmean(p_rr), np.nanmean(p_rs), np.nanmean(p_ss)]
         self.p_stds  = [np.nanstd(p_rr), np.nanstd(p_rs), np.nanstd(p_ss)]
+
+        self._mfdcca_raw = {
+            "H_rr": np.asarray(H_rr, float),
+            "H_rs": np.asarray(H_rs, float),
+            "H_ss": np.asarray(H_ss, float),
+            "Fq_rr": np.asarray(Fq_rr, float),
+            "Fq_rs": np.asarray(Fq_rs, float),
+            "Fq_ss": np.asarray(Fq_ss, float),
+            "Da_rr": np.asarray(Da_rr, float),
+            "Da_rs": np.asarray(Da_rs, float),
+            "Da_ss": np.asarray(Da_ss, float),
+            "p_rr": np.asarray(p_rr, float),
+            "p_rs": np.asarray(p_rs, float),
+            "p_ss": np.asarray(p_ss, float),
+        }
 
         print(f"\n{self.method} Cross-Hurst Exponent (avg H(q)):")
         print(f"  real vs real:        {self.means[0]:.4f} ± {self.stds[0]:.4f}")
@@ -834,7 +953,6 @@ class ComplexityFidelity:
 
 
     # Entropy/Complexity similarity + optional nonlinearity
-
     def compute_entropy_complexity_metrics(
             self,
             real_data: np.ndarray,
@@ -868,6 +986,49 @@ class ComplexityFidelity:
 
         se_R, pe_R, lz_R = _features(R)
         se_S, pe_S, lz_S = _features(S)
+
+
+
+
+
+        # RR / RS / SS distributions + RR vs RS tests (entropy)
+
+        def _pairwise_abs_diffs(a, b=None):
+            a = np.asarray(a, float)
+            a = a[np.isfinite(a)]
+            if b is None:
+                diffs = []
+                for i in range(len(a)):
+                    for j in range(i + 1, len(a)):
+                        diffs.append(abs(a[i] - a[j]))
+                return np.array(diffs, float)
+            else:
+                b = np.asarray(b, float)
+                b = b[np.isfinite(b)]
+                diffs = []
+                for ai in a:
+                    for bj in b:
+                        diffs.append(abs(ai - bj))
+                return np.array(diffs, float)
+
+        rr_se = _pairwise_abs_diffs(se_R)
+        rs_se = _pairwise_abs_diffs(se_R, se_S)
+        ss_se = _pairwise_abs_diffs(se_S)
+
+        rr_pe = _pairwise_abs_diffs(pe_R)
+        rs_pe = _pairwise_abs_diffs(pe_R, pe_S)
+        ss_pe = _pairwise_abs_diffs(pe_S)
+
+        rr_lz = _pairwise_abs_diffs(lz_R)
+        rs_lz = _pairwise_abs_diffs(lz_R, lz_S)
+        ss_lz = _pairwise_abs_diffs(lz_S)
+
+        if verbose:
+            print("=== Entropy RR / RS / SS distributions (|Δmetric|) + RR vs RS tests ===")
+            self._print_rr_rs_ss_with_test("Sample Entropy |Δ|", rr_se, rs_se, ss_se)
+            self._print_rr_rs_ss_with_test("Permutation Entropy |Δ|", rr_pe, rs_pe, ss_pe)
+            self._print_rr_rs_ss_with_test("Lempel–Ziv Complexity |Δ|", rr_lz, rs_lz, ss_lz)
+
 
         # Helper to compute raw + real-SD-normalized WD
         def _wd_with_real_norm(real_vals, synth_vals, *, allow_inf=False):
