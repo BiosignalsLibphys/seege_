@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import cwt, morlet2
 from skimage.metrics import structural_similarity as ssim, mean_squared_error
 from sklearn.metrics.pairwise import cosine_similarity
+from scipy.stats import mannwhitneyu, wilcoxon
 
 class TimeFrequencyFidelity:
     """
@@ -78,6 +79,37 @@ class TimeFrequencyFidelity:
         self.num_freqs = int(num_freqs)
         self.frequencies = np.linspace(freq_min, freq_max, num_freqs)
         #self.frequencies = np.logspace(np.log10(freq_min), np.log10(freq_max), num_freqs)
+
+    def cliffs_delta(self, x, y):
+        x = np.asarray(x)
+        y = np.asarray(y)
+        # delta = P(x>y) - P(x<y)
+        gt = 0
+        lt = 0
+        for xi in x:
+            gt += np.sum(xi > y)
+            lt += np.sum(xi < y)
+        return (gt - lt) / (len(x) * len(y))
+
+    def _test_rr_vs_rs(self, rr, rs, *, mode: str):
+        rr = np.asarray(rr, dtype=float)
+        rs = np.asarray(rs, dtype=float)
+        rr = rr[np.isfinite(rr)]
+        rs = rs[np.isfinite(rs)]
+
+        if len(rr) == 0 or len(rs) == 0:
+            return {"p": np.nan, "effect": np.nan, "test": "NA"}
+
+        if mode == "zip":
+            # paired comparison only makes sense if rr and rs are paired by construction
+            m = min(len(rr), len(rs))
+            stat = wilcoxon(rr[:m], rs[:m], alternative="two-sided")
+            # effect size for paired can be rank-biserial; but to stay consistent with your SoA, keep CliffΔ only for unpaired
+            return {"p": float(stat.pvalue), "effect": np.nan, "test": "Wilcoxon"}
+        else:
+            stat = mannwhitneyu(rr, rs, alternative="two-sided")
+            cd = self.cliffs_delta(rr, rs)
+            return {"p": float(stat.pvalue), "effect": float(cd), "test": "MWU + CliffΔ"}
 
     def set_sampling_rate(self, fs: int) -> None:
         """Change the sampling frequency after the object has been created."""
@@ -458,6 +490,12 @@ class TimeFrequencyFidelity:
         ss_nrmse_m, ss_nrmse_sd = _mean_sd(ss_nrmse)
         ss_cos_m, ss_cos_sd = _mean_sd(ss_cos)
 
+        tests = {
+            "SSIM": self._test_rr_vs_rs(rr_ssim, rs_ssim, mode=mode),
+            "NRMSE": self._test_rr_vs_rs(rr_nrmse, rs_nrmse, mode=mode),
+            "Cosine": self._test_rr_vs_rs(rr_cos, rs_cos, mode=mode),
+        }
+
         # Prints
         def _fmt(x):
             return "nan" if not np.isfinite(x) else f"{x:.3g}"
@@ -472,6 +510,24 @@ class TimeFrequencyFidelity:
               "| NRMSE =", f"{_fmt(ss_nrmse_m)} ± {_fmt(ss_nrmse_sd)}",
               "| Cosine =", f"{_fmt(ss_cos_m)} ± {_fmt(ss_cos_sd)} | mode: {mode}, pairs: {len(ss_ssim)} ({analysis_type})")
 
+        def _fmt_p(x):
+            return "nan" if not np.isfinite(x) else f"{x:.30e}"
+
+        def _fmt_eff(x):
+            return "nan" if not np.isfinite(x) else f"{x:.3g}"
+
+        print(
+            f"RR vs RS tests SSIM: p={_fmt_p(tests['SSIM']['p'])}, "
+            f"CliffΔ={_fmt_eff(tests['SSIM']['effect'])}"
+        )
+        print(
+            f"RR vs RS tests NRMSE: p={_fmt_p(tests['NRMSE']['p'])}, "
+            f"CliffΔ={_fmt_eff(tests['NRMSE']['effect'])}"
+        )
+        print(
+            f"RR vs RS tests Cosine: p={_fmt_p(tests['Cosine']['p'])}, "
+            f"CliffΔ={_fmt_eff(tests['Cosine']['effect'])}"
+        )
 
         # Return
         scalogram_similarity_metrics = {
@@ -500,7 +556,9 @@ class TimeFrequencyFidelity:
                 "Pairs": len(rs_ssim),
                 "SSIM mean": rs_ssim_m, "SSIM SD": rs_ssim_sd,
                 "NRMSE mean": rs_nrmse_m, "NRMSE SD": rs_nrmse_sd,
-                "Cosine mean": rs_cos_m, "Cosine SD": rs_cos_sd}
+                "Cosine mean": rs_cos_m, "Cosine SD": rs_cos_sd},
+
+            "RR_vs_RS": tests,
         }
 
         return scalogram_similarity_metrics
