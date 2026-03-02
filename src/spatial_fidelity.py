@@ -28,6 +28,55 @@ class SpatialFidelity:
     def __init__(self):
         pass
 
+    def _as_NCT(self, x, name="data", *, expected_C=None, expected_T=None):
+        x = np.asarray(x, dtype=float)
+
+        if x.ndim == 3:
+            # (N,C,T)
+            N, C, T = x.shape
+            if C < 2:
+                raise ValueError(f"{name}: need at least 2 channels (C>=2). Got {x.shape}.")
+            if expected_C is not None and C != expected_C:
+                raise ValueError(f"{name}: expected C={expected_C}, got {C} in shape {x.shape}.")
+            if expected_T is not None and T != expected_T:
+                raise ValueError(f"{name}: expected T={expected_T}, got {T} in shape {x.shape}.")
+            return x
+
+        if x.ndim == 2:
+            # Ambiguous: could be (C,T) or (N,T)
+            a, b = x.shape
+
+            # If user provides expected_C / expected_T, we can disambiguate safely
+            if expected_C is not None and expected_T is not None:
+                if (a, b) == (expected_C, expected_T):
+                    pass  # it's (C,T)
+                elif (a, b) == (expected_T, expected_C):
+                    x = x.T
+                else:
+                    raise ValueError(
+                        f"{name}: expected either (C,T)=({expected_C},{expected_T}) or "
+                        f"(T,C)=({expected_T},{expected_C}), got {x.shape}."
+                    )
+            else:
+                # Heuristic: if it looks like (N,T) with N>>C, reject
+                # Example: (21200,1536) should not be treated as (C,T)
+                if a > 256 and (expected_T is None or b == expected_T):
+                    raise ValueError(
+                        f"{name}: got 2D array {x.shape}. This looks like (N,T) single-channel segments, "
+                        "not (C,T). Spatial fidelity requires multi-channel samples shaped (N,C,T)."
+                    )
+
+                # Otherwise treat as (C,T) but fix orientation if needed
+                if a > b:
+                    x = x.T
+
+            if x.shape[0] < 2:
+                raise ValueError(f"{name}: need at least 2 channels (C>=2). Got {x.shape}.")
+
+            return x[np.newaxis, ...]  # (1,C,T)
+
+        raise ValueError(f"{name}: expected shape (N,C,T) or (C,T). Got {x.shape}.")
+
     def _compute_corr_matrix(self, data):
         x = np.asarray(data, dtype=float)
 
@@ -39,12 +88,16 @@ class SpatialFidelity:
         if x.shape[0] > x.shape[1]:  # e.g. (1536, 20)
             x = x.T  # -> (20, 1536)
 
+        if x.shape[0] < 2:
+            raise ValueError(f"Need at least 2 channels to compute correlation matrix. Got {x.shape}.")
+
         # guard against NaNs/infs and constant channels
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
         std = x.std(axis=1)
         if np.any(std == 0):
             # If a channel is constant, correlation is undefined; add tiny noise
-            x = x + (1e-12 * np.random.default_rng(0).normal(size=x.shape))
+            rng = np.random.default_rng(0)
+            x = x + (1e-12 * rng.normal(size=x.shape))
 
         C = np.corrcoef(x)
         if C.shape != (x.shape[0], x.shape[0]):
@@ -55,7 +108,7 @@ class SpatialFidelity:
     def _frobenius_distance(self, A, B):
         return norm(A - B, ord="fro")
 
-    def evaluate(self, real_data, synthetic_data, mode="all_vs_all"):
+    def evaluate(self, real_data, synthetic_data, mode="all_vs_all", max_pairs_rr=20000, max_pairs_ss=20000, max_pairs_rs=40000, seed=0):
         """
         Evaluate spatial correlation fidelity between real and synthetic datasets.
 
@@ -81,67 +134,74 @@ class SpatialFidelity:
               "z_SC": float,
               "F_spatial": float }
         """
-        R = np.asarray(real_data)
-        S = np.asarray(synthetic_data)
 
-        if R.ndim == 2:
-            R = R[np.newaxis, ...]
-        if S.ndim == 2:
-            S = S[np.newaxis, ...]
+        R = self._as_NCT(real_data, name="real_data", expected_C=None, expected_T=None)
+        S = self._as_NCT(synthetic_data, name="synthetic_data", expected_C=R.shape[1], expected_T=R.shape[2])
 
         nR, nS = R.shape[0], S.shape[0]
+
+        if nR < 2:
+            raise ValueError(f"Need at least 2 real samples for RR. Got nR={nR}.")
+        if nS < 2:
+            raise ValueError(f"Need at least 2 synthetic samples for SS. Got nS={nS}.")
 
         # Compute correlation matrices
         corr_R = [self._compute_corr_matrix(r) for r in R]
         corr_S = [self._compute_corr_matrix(s) for s in S]
 
-        r0 = real_data[0]
-        print("single sample shape:", r0.shape)  # should be (20, 1536)
+        rng = np.random.default_rng(seed)
 
-        C0 = np.corrcoef(r0)
-        print("corr matrix shape:", C0.shape)  # MUST be (20, 20)
-        print("any NaNs in corr?:", np.isnan(C0).any())
+        # --- helper: sample unique pairs (i<j)
+        def sample_pairs(n, max_pairs):
+            total = n * (n - 1) // 2
+            if max_pairs is None or max_pairs >= total:
+                return [(i, j) for i in range(n) for j in range(i + 1, n)]
+            pairs = set()
+            while len(pairs) < max_pairs:
+                i = rng.integers(0, n)
+                j = rng.integers(0, n)
+                if i == j:
+                    continue
+                a, b = (i, j) if i < j else (j, i)
+                pairs.add((a, b))
+            return list(pairs)
 
-        # RR distances
-        RR = []
-        for i in range(nR):
-            for j in range(i + 1, nR):
-                RR.append(self._frobenius_distance(corr_R[i], corr_R[j]))
+        # --- helper: sample cross pairs (i in [0,nA), j in [0,nB))
+        def sample_cross_pairs(nA, nB, max_pairs):
+            total = nA * nB
+            if max_pairs is None or max_pairs >= total:
+                return [(i, j) for i in range(nA) for j in range(nB)]
+            pairs = set()
+            while len(pairs) < max_pairs:
+                i = int(rng.integers(0, nA))
+                j = int(rng.integers(0, nB))
+                pairs.add((i, j))
+            return list(pairs)
 
-        # SS distances
-        SS = []
-        for i in range(nS):
-            for j in range(i + 1, nS):
-                SS.append(self._frobenius_distance(corr_S[i], corr_S[j]))
+        rr_pairs = sample_pairs(nR, max_pairs_rr)
+        ss_pairs = sample_pairs(nS, max_pairs_ss)
+        rs_pairs = sample_cross_pairs(nR, nS, max_pairs_rs)
 
-        # RS distances
-        RS = []
-        for i in range(nR):
-            for j in range(nS):
-                RS.append(self._frobenius_distance(corr_R[i], corr_S[j]))
+        RR = np.asarray([self._frobenius_distance(corr_R[i], corr_R[j]) for i, j in rr_pairs], dtype=float)
+        SS = np.asarray([self._frobenius_distance(corr_S[i], corr_S[j]) for i, j in ss_pairs], dtype=float)
+        RS = np.asarray([self._frobenius_distance(corr_R[i], corr_S[j]) for i, j in rs_pairs], dtype=float)
 
-        RR = np.asarray(RR, dtype=float)
-        SS = np.asarray(SS, dtype=float)
-        RS = np.asarray(RS, dtype=float)
+        RR_mean = float(np.nanmean(RR)) if RR.size else np.nan
+        RR_sd = float(np.nanstd(RR, ddof=0)) if RR.size else np.nan
 
-        RR_mean = np.nanmean(RR) if RR.size > 0 else np.nan
-        RR_sd = np.nanstd(RR, ddof=1) if RR.size > 1 else np.nan
+        SS_mean = float(np.nanmean(SS)) if SS.size else np.nan
+        SS_sd = float(np.nanstd(SS, ddof=0)) if SS.size else np.nan
 
-        SS_mean = np.nanmean(SS) if SS.size > 0 else np.nan
-        SS_sd = np.nanstd(SS, ddof=1) if SS.size > 1 else np.nan
+        RS_mean = float(np.nanmean(RS)) if RS.size else np.nan
+        RS_sd = float(np.nanstd(RS, ddof=0)) if RS.size else np.nan
 
-        RS_mean = np.nanmean(RS) if RS.size > 0 else np.nan
-        RS_sd = np.nanstd(RS, ddof=1) if RS.size > 1 else np.nan
-
-        #  Standardised score
-        if RR_sd is not None and RR_sd > 0:
+        if np.isfinite(RR_sd) and RR_sd > 0 and np.isfinite(RR_mean) and np.isfinite(RS_mean):
             z_SC = (RS_mean - RR_mean) / RR_sd
         else:
             z_SC = np.nan
 
-        F_spatial = 1 / (1 + abs(z_SC)) if np.isfinite(z_SC) else np.nan
+        F_spatial = 1 / (1 + abs(z_SC)) if np.isfinite(z_SC) else np.nan# --- compute distances for RR
 
-        # Print (kept inside the function, l
         print(f"Spatial Fidelity Score = {F_spatial:.3f}\n")
         print(f"RR  | Distance = {RR_mean:.3f} ± {RR_sd:.3f}")
         print(f"SS  | Distance = {SS_mean:.3f} ± {SS_sd:.3f}")
@@ -149,12 +209,10 @@ class SpatialFidelity:
         print(f"Standardised z = {z_SC:.3f}")
 
         return {
-            "RR_mean": RR_mean,
-            "RR_sd": RR_sd,
-            "SS_mean": SS_mean,
-            "SS_sd": SS_sd,
-            "RS_mean": RS_mean,
-            "RS_sd": RS_sd,
+            "RR_mean": RR_mean, "RR_sd": RR_sd,
+            "SS_mean": SS_mean, "SS_sd": SS_sd,
+            "RS_mean": RS_mean, "RS_sd": RS_sd,
             "z_SC": z_SC,
             "F_spatial": F_spatial
         }
+
