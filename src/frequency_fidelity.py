@@ -17,7 +17,7 @@ class FrequencyFidelity:
     This class computes relative power in different frequency bands including HFO,
     dominant frequencies, and performs statistical comparisons (normality,
     paired t-test / Wilcoxon). It can also compute coherence and approximate
-    a Wasserstein distance in the frequency domain.
+    a Wasserstein distance (standardized by real–real (RR) variability) in the frequency domain.
 
     Example Usage:
     --------------
@@ -418,9 +418,13 @@ class FrequencyFidelity:
             x = x[:L] - np.mean(x[:L])
             y = y[:L] - np.mean(y[:L])
 
-            # choose nperseg to ensure at least 2 segments (ideally more)
-            base_nperseg = max(8, int(self.fs * float(win_s)))
-            # start from min(requested, L//2); then try to shrink to reach ≥2 segments
+            # Frequency-adaptive approach
+            f_low = max(fmin, 1e-6)  # fmin is already available from outer scope
+            K_cycles = 10  # Match _compute_psd default
+            base_nperseg = int(np.ceil(K_cycles * self.fs / f_low))
+            base_nperseg = min(L, max(8, base_nperseg))
+
+            # Start from min(requested, L//2); then try to shrink to reach ≥2 segments
             local_nperseg = min(base_nperseg, max(8, L // 2))
 
             def _num_segments(L_, nseg_, ovlp_):
@@ -576,30 +580,20 @@ class FrequencyFidelity:
         }
         return result
 
-    def spectral_wasserstein_distance(self, real_data, synthetic_data, fmin=0.5, fmax=500, mode="pairmean", per_band=True):
+    def spectral_wasserstein_distance(
+            self, real_data, synthetic_data,
+            fmin=0.5, fmax=500, mode="pairmean", per_band=True,
+            standardize=True
+    ):
         """
-        Spectral Wasserstein distance (Earth Mover's Distance) computed ALONG the
-        frequency axis between normalized PSDs. Phase-agnostic. Units: Hz.
+        Spectral Wasserstein Distance (WD) between normalized PSDs.
+        If standardize=True, also returns WD standardized by real–real (RR) variability.
 
-        Parameters
-        ----------
-        real_data, synthetic_data : np.ndarray or list[np.ndarray]
-            Arrays of signals. If 1D arrays are provided, they are treated as single signals.
-        fmin, fmax : float
-            Frequency range (Hz) over which to compute the distance.
-        mode : {"pairmean", "meanpsd"}
-            - "pairmean": average WD over zipped real[i] vs synth[i] pairs
-            - "meanpsd" : WD between the mean normalized PSDs of each set
-        per_band : bool
-            If True, also computes WD per canonical EEG band and returns (band_dict, overall).
-
-        Returns
-        -------
-        float or (dict, float)
-            Overall WD in Hz, or (per-band dict, overall) if per_band=True.
+        Standardised WD:
+            z_WD = (mean(WD_RS) - mean(WD_RR)) / std(WD_RR)
         """
 
-        # Wrap single 1D signals
+        # Wrap single signals
         if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
             real_data = [real_data]
         if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
@@ -608,97 +602,76 @@ class FrequencyFidelity:
         nyq = self.fs / 2.0
         fmax = min(fmax, nyq)
 
-        # Helpers
         def _psd_norm(sig, lo, hi):
-            """Normalized PSD density over [lo, hi]; integrates to 1."""
             nperseg = min(len(sig), 4 * self.fs)
             f, p = welch(sig, fs=self.fs, nperseg=nperseg,
-                         window='hann', detrend='constant')
+                         window="hann", detrend="constant")
             m = (f >= lo) & (f <= hi)
             f, p = f[m], p[m]
             area = simps(p, f)
             if area <= 0 or not np.isfinite(area):
-                # fallback uniform density over the support
                 p = np.ones_like(p)
                 area = simps(p, f)
-            p = p / area
-            return f, p
+            return f, p / area
 
-        def _wd_pair(r_sig, s_sig, lo, hi):
-            fr, pr = _psd_norm(r_sig, lo, hi)
-            fs_, ps = _psd_norm(s_sig, lo, hi)
-            # align on a common (finer) grid
-            f_common = fr if fr.size >= fs_.size else fs_
-            pr_i = np.interp(f_common, fr, pr)
-            ps_i = np.interp(f_common, fs_, ps)
-            # weights (densities) must sum to 1 for scipy's wasserstein_distance
-            pr_i = pr_i / pr_i.sum()
-            ps_i = ps_i / ps_i.sum()
-            return wasserstein_distance(f_common, f_common, pr_i, ps_i)  # in Hz
+        def _wd_pair(a, b, lo, hi):
+            fa, pa = _psd_norm(a, lo, hi)
+            fb, pb = _psd_norm(b, lo, hi)
+            f = fa if fa.size >= fb.size else fb
+            pa = np.interp(f, fa, pa)
+            pb = np.interp(f, fb, pb)
+            pa /= pa.sum()
+            pb /= pb.sum()
+            return wasserstein_distance(f, f, pa, pb)
 
-        def _wd_meanpsd(data, lo, hi):
-            grids, dens = [], []
-            for sig in data:
-                f, p = _psd_norm(sig, lo, hi)
-                grids.append(f);
-                dens.append(p)
-            # interpolate onto the densest grid
-            base = max(grids, key=len)
-            dens_i = [np.interp(base, fi, di) for fi, di in zip(grids, dens)]
-            mean_d = np.mean(dens_i, axis=0)
-            mean_d = mean_d / mean_d.sum()
-            return base, mean_d
+        # ---------- RS (real–synthetic)
+        rs_vals = [_wd_pair(r, s, fmin, fmax)
+                   for r, s in zip(real_data, synthetic_data)]
+        wd_rs = float(np.mean(rs_vals))
 
-        # Overall over [fmin, fmax]
-        if mode == "pairmean":
-            vals = [_wd_pair(r, s, fmin, fmax) for r, s in zip(real_data, synthetic_data)]
-            spectral_wasserstein_distance = float(np.mean(vals)) if len(vals) else float('nan')
-        elif mode == "meanpsd":
-            fr, pr = _wd_meanpsd(real_data, fmin, fmax)
-            fs_, ps = _wd_meanpsd(synthetic_data, fmin, fmax)
-            f_common = fr if fr.size >= fs_.size else fs_
-            pr_i = np.interp(f_common, fr, pr);
-            pr_i = pr_i / pr_i.sum()
-            ps_i = np.interp(f_common, fs_, ps);
-            ps_i = ps_i / ps_i.sum()
-            spectral_wasserstein_distance = float(wasserstein_distance(f_common, f_common, pr_i, ps_i))
+        # ---------- RR (real–real baseline)
+        rr_vals = [_wd_pair(real_data[i], real_data[i + 1], fmin, fmax)
+                   for i in range(len(real_data) - 1)]
+
+        if standardize and len(rr_vals) >= 5:
+            mu_rr = np.mean(rr_vals)
+            sd_rr = np.std(rr_vals, ddof=1)
+            z_wd = (wd_rs - mu_rr) / sd_rr if sd_rr > 0 else np.nan
         else:
-            raise ValueError("mode must be 'pairmean' or 'meanpsd'")
+            z_wd = np.nan
 
+        # ---------- Per-band
         if per_band:
-            # build per-band dict from class edges/names, clipped to Nyquist
-            band_dict = {}
+            band_out = {}
             for i, name in enumerate(self.band_names):
                 lo, hi = self.band_edges[i], self.band_edges[i + 1]
-                lo_c, hi_c = max(lo, fmin), min(hi, nyq)
-                if hi_c > lo_c:
-                    band_dict[name] = (lo_c, hi_c)
+                lo, hi = max(lo, fmin), min(hi, nyq)
+                if hi <= lo:
+                    continue
 
-            spectral_wasserstein_distance_bands = {}
-            for name, (lo, hi) in band_dict.items():
-                if mode == "pairmean":
-                    vals = [_wd_pair(r, s, lo, hi) for r, s in zip(real_data, synthetic_data)]
-                    spectral_wasserstein_distance_bands[name] = float(np.mean(vals)) if len(vals) else float('nan')
+                rs = [_wd_pair(r, s, lo, hi)
+                      for r, s in zip(real_data, synthetic_data)]
+                rr = [_wd_pair(real_data[j], real_data[j + 1], lo, hi)
+                      for j in range(len(real_data) - 1)]
+
+                wd_rs_b = float(np.mean(rs))
+                if standardize and len(rr) >= 5:
+                    z_b = (wd_rs_b - np.mean(rr)) / np.std(rr, ddof=1)
                 else:
-                    fr, pr = _wd_meanpsd(real_data, lo, hi)
-                    fs_, ps = _wd_meanpsd(synthetic_data, lo, hi)
-                    f_common = fr if fr.size >= fs_.size else fs_
-                    pr_i = np.interp(f_common, fr, pr);
-                    pr_i /= pr_i.sum()
-                    ps_i = np.interp(f_common, fs_, ps);
-                    ps_i /= ps_i.sum()
-                    spectral_wasserstein_distance_bands[name] = float(
-                        wasserstein_distance(f_common, f_common, pr_i, ps_i)
-                    )
+                    z_b = np.nan
 
-            print(f"Spectral Wasserstein distance (Hz) [{fmin}-{fmax}]: {spectral_wasserstein_distance:.4f}")
-            for k, v in spectral_wasserstein_distance_bands.items():
-                print(f"  {k}: {v:.4f} Hz")
-            return spectral_wasserstein_distance_bands, spectral_wasserstein_distance
+                band_out[name] = dict(
+                    WD_Hz=wd_rs_b,
+                    z_WD=z_b
+                )
 
-        # Print & return overall only
-        print(f"Spectral Wasserstein distance (Hz) [{fmin}-{fmax}]: {spectral_wasserstein_distance:.4f}")
-        return spectral_wasserstein_distance
+            print(f"Spectral WD [{fmin}-{fmax}] Hz: {wd_rs:.4f}")
+            print(f"Standardised WD (RR baseline): z = {z_wd:.2f}")
+            return band_out, dict(WD_Hz=wd_rs, z_WD=z_wd)
+
+        print(f"Spectral WD [{fmin}-{fmax}] Hz: {wd_rs:.4f}")
+        print(f"Standardised WD (RR baseline): z = {z_wd:.2f}")
+        return dict(WD_Hz=wd_rs, z_WD=z_wd)
 
     def plot_psd(self, real_data, synthetic_data, scale="linear",smooth=False, window_length=11, polyorder=2,xlim=None, ylim=None, analysis_band=None):
         """
