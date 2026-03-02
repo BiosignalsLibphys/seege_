@@ -85,7 +85,7 @@ class TimeFrequencyFidelity:
             raise ValueError("Sampling frequency `fs` must be positive.")
         self.fs = fs
 
-    # ------------------------ NEW HELPERS (freq grid + intensity) ------------------------
+    # Freq grid + intensity
 
     def _build_frequency_grid(self, freq_scale: str, num_freqs: int | None = None) -> np.ndarray:
         """
@@ -634,6 +634,7 @@ class TimeFrequencyFidelity:
             plt.savefig(save, bbox_inches='tight', dpi=200)
         plt.show()
         return fig
+
     # Burst statistics helpers
     def _band_mask(self, F: np.ndarray, band: tuple[float, float]) -> np.ndarray:
         """NEW: Boolean mask for frequencies inside a band (f_low, f_high)."""
@@ -643,7 +644,7 @@ class TimeFrequencyFidelity:
         return (F >= f_lo) & (F <= f_hi)
 
     def _band_envelope_from_scalogram(self, amp: np.ndarray, F: np.ndarray, band: tuple[float, float],
-                                      smooth_ms: float = 50.0) -> np.ndarray:
+                                      smooth_ms: float = 50.0, normalize: bool = True) -> np.ndarray:
         """
         Band-limited envelope from scalogram by averaging amplitude over band rows.
         Optionally smooth with a moving average (smooth_ms).
@@ -655,6 +656,12 @@ class TimeFrequencyFidelity:
         # Average amplitude over the band (freqs x time -> time)
         env = np.mean(amp[mask, :], axis=0)
 
+        # Normalize by baseline (e.g., median) to handle amplitude differences
+        if normalize:
+            baseline = np.median(env)
+            if baseline > 0:
+                env = env / baseline
+
         # Optional moving-average smoothing in samples
         if smooth_ms and smooth_ms > 0:
             win = max(1, int(round((smooth_ms / 1000.0) * self.fs)))
@@ -664,10 +671,10 @@ class TimeFrequencyFidelity:
         return env
 
     def _detect_bursts_from_envelope(self, envelope: np.ndarray, *,
-                                     threshold: str = "percentile",
+                                     threshold: str = "std",
                                      p: float = 75.0,
-                                     kappa: float | None = None,
-                                     min_duration_ms: float = 100.0,
+                                     kappa: float | None = 2.0,
+                                     min_duration_ms: float = 20.0,
                                      merge_gap_ms: float = 50.0):
         """
         Event-level burst detection on a 1D envelope.
@@ -762,13 +769,13 @@ class TimeFrequencyFidelity:
 
     def compute_burst_statistics(self, real_data, synthetic_data, *,
                                  band=(13.0, 30.0),
-                                 threshold="percentile",
+                                 threshold="std", #percentile
                                  p=75.0,
-                                 kappa=None,
-                                 min_duration_ms=100.0,
+                                 kappa=2.0, #None
+                                 min_duration_ms=20.0,
                                  merge_gap_ms=50.0,
                                  freq_scale: str | None = None,
-                                 smooth_ms: float = 50.0,
+                                 smooth_ms: float = 20.0,
                                  verbose: bool = True):
         """
         Compute burst statistics for real and synthetic datasets using the scalogram.
