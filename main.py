@@ -127,6 +127,15 @@ if __name__ == '__main__':
     # Compute complexity fidelity score
     #evaluation_score.compute_complexity_fidelity_score(real_data, synthetic_data)
 
+    # Compute spatial fidelity
+    # Initialize class
+    sf = SpatialFidelity()
+    # Compute spatial fidelity
+    sf.evaluate(real, synthetic)
+
+    # Compute spatial fidelity score
+    evaluation_score.compute_spatial_fidelity_score(real, synthetic)
+
     # Compute fidelity score
     #evaluation_score.compute_fidelity_score(real_data, synthetic_data, fs=2048)
 
