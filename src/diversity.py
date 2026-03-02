@@ -51,7 +51,7 @@ class Diversity:
     cov_out = div.compute_coverage_diversity(real_data, synthetic_data)
     geom = div.compute_geometric_diversity(real_data, synthetic_data)
     intr = div.compute_intrinsic_diversity(real_data, synthetic_data)
-    div.plot_embeddings("UMAP", geom, save="results/umap_diversity.png")
+    div.plot_embeddings("UMAP", geom)
     """
 
     def __init__(self, n_components=2, n_neighbors=15, min_dist=0.1, random_state=42, max_pairs=200_000):
@@ -375,25 +375,16 @@ class Diversity:
     # 4) Plotting: same as before (expects *_Embedding in results dict)
 
     @staticmethod
-    def plot_embeddings(projection_name: str, geom: dict, save: str = None, plot_title: str = None):
+    def plot_embeddings(projection_name: str, geom: dict, save: str = None, plot_title: str = None, *,
+                        kind: str = 'scatter', scatter_kws: dict | None = None, kde_kws: dict | None = None):
         """
         Plot a 2D projection of real vs synthetic data using PCA or UMAP.
 
-        Parameters
-        ----------
-        projection_name : {'PCA', 'UMAP'}
-            Which embedding to visualize.
-        geom : dict
-            The dictionary returned by `compute_geometric_diversity`, containing
-            '<PROJECTION>_Embedding' arrays (e.g., 'PCA_Embedding', 'UMAP_Embedding').
-        save : str, optional
-            Path to save the generated figure (e.g., 'results/pca_diversity.png').
-            If None, the figure is only displayed and not saved.
-
-        Notes
-        -----
-        - Assumes half of the points are real and half synthetic.
-        - Returns the matplotlib Figure object.
+        Argmuments:
+        - kind: {'scatter','kde'} choose plotting style. 'scatter' uses points (default).
+                'kde' shows 2D kernel density estimate contours/filled densities for each class.
+        - scatter_kws: dict of keyword args forwarded to seaborn.scatterplot (when kind='scatter').
+        - kde_kws: dict of keyword args forwarded to seaborn.kdeplot (when kind='kde').
         """
         key = f"{projection_name.upper()}_Embedding"
         if key not in geom:
@@ -421,15 +412,67 @@ class Diversity:
         df = pd.DataFrame(emb, columns=['dim1', 'dim2'])
         df['Type'] = labels
 
+        # plotting defaults
+        scatter_kws = {} if scatter_kws is None else dict(scatter_kws)
+        kde_kws = {} if kde_kws is None else dict(kde_kws)
+
         fig, ax = plt.subplots(figsize=(5, 4))
-        sns.scatterplot(
-            data=df, x='dim1', y='dim2', hue='Type',
-            palette={'Real': 'limegreen', 'Synthetic': 'lightskyblue'},
-            edgecolor='black', s=80, alpha=0.8, legend=True, ax=ax
-        )
+
+        if kind not in {'scatter', 'kde'}:
+            raise ValueError("kind must be either 'scatter' or 'kde'.")
+
+        if kind == 'scatter':
+            # default scatter kwargs, can be overridden
+            skw = dict(edgecolor='black', s=80, alpha=0.8)
+            skw.update(scatter_kws)
+            sns.scatterplot(
+                data=df, x='dim1', y='dim2', hue='Type',
+                palette={'Real': 'limegreen', 'Synthetic': 'lightskyblue'},
+                legend=True, ax=ax, **skw
+            )
+
+        else:  # kind == 'kde'
+            # For KDE we draw filled contours for each class separately
+            # Default kde kwargs
+            default_kde = dict(levels=6, fill=True, thresh=0.05, alpha=0.45, bw_method='scott')
+            default_kde.update(kde_kws)
+
+            # Plot KDE for Real
+            real_df = df[df['Type'] == 'Real']
+            synth_df = df[df['Type'] == 'Synthetic']
+
+            # If too few points for KDE, fall back to scatter for that class
+            def _safe_kde_plot(dfi, color, label):
+                if dfi.shape[0] < 3 or np.isfinite(dfi[['dim1','dim2']].values).sum() < 3:
+                    # fallback scatter
+                    sns.scatterplot(data=dfi, x='dim1', y='dim2', color=color, edgecolor='black', s=60, alpha=0.7, ax=ax, label=label)
+                    return False
+                try:
+                    sns.kdeplot(data=dfi, x='dim1', y='dim2', color=color, ax=ax, **default_kde)
+                    return True
+                except Exception:
+                    # any KDE failure -> fallback scatter
+                    sns.scatterplot(data=dfi, x='dim1', y='dim2', color=color, edgecolor='black', s=60, alpha=0.7, ax=ax, label=label)
+                    return False
+
+            r_ok = _safe_kde_plot(real_df, 'limegreen', 'Real')
+            s_ok = _safe_kde_plot(synth_df, 'lightskyblue', 'Synthetic')
+
+            # Build legend manually because kdeplot doesn't always add nice handles
+            from matplotlib.patches import Patch
+            handles = []
+            if r_ok:
+                handles.append(Patch(facecolor='limegreen', edgecolor='k', alpha=0.45, label='Real'))
+            else:
+                handles.append(Patch(facecolor='limegreen', edgecolor='k', alpha=0.9, label='Real'))
+            if s_ok:
+                handles.append(Patch(facecolor='lightskyblue', edgecolor='k', alpha=0.45, label='Synthetic'))
+            else:
+                handles.append(Patch(facecolor='lightskyblue', edgecolor='k', alpha=0.9, label='Synthetic'))
+            ax.legend(handles=handles, title='', fontsize=12)
 
         final_title = plot_title if plot_title is not None else title
-        ax.set_title(final_title)
+        ax.set_title(final_title, fontsize=20)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_xlabel('')
@@ -439,7 +482,9 @@ class Diversity:
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-        ax.legend(title='', fontsize=15)
+        if kind == 'scatter':
+            ax.legend(title='', fontsize=15)
+
         fig.tight_layout()
 
         # Save if path is provided
