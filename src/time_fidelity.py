@@ -156,29 +156,41 @@ class TimeFidelity:
 
         param_names = ["Activity", "Mobility", "Complexity"]
 
-        # Create 2x2 figure
+        # Create 2x2 figure with white background and manual grids
         fig = plt.figure(figsize=(14, 10))
+        fig.patch.set_facecolor('white')
 
         # Histograms: Activity, Mobility, Complexity (3 subplots)
         for i, name in enumerate(param_names):
             ax = fig.add_subplot(2, 2, i + 1)
+            # Draw grid behind the plotted bars/lines so histogram appearance is unchanged
+            ax.set_axisbelow(True)
             sns.histplot(real_hjorth[:, i],
                          label="Real",
                          kde=True,
                          stat="density",
                          color="limegreen",
+                         zorder=2,
                          ax=ax)
             sns.histplot(synthetic_hjorth[:, i],
                          label="Synthetic",
                          kde=True,
                          stat="density",
                          color="lightskyblue",
+                         zorder=2,
                          ax=ax)
+            # ensure white facecolor and visible grid without changing plot styles
+            ax.set_facecolor("white")
+            ax.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.6)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_visible(False)
+            ax.spines['bottom'].set_visible(False)
             ax.set_title(f"Hjorth {name} Histogram", fontsize=20)
             ax.set_xlabel(name, fontsize=15)
             ax.set_ylabel("Density", fontsize=15)
             if i == 0:  # legend only on first histogram to avoid repetition
-                ax.legend(fontsize=12)
+                ax.legend(fontsize=15)
 
         # 3D scatter on bottom-right subplot
         ax3d = fig.add_subplot(2, 2, 4, projection="3d")
@@ -196,13 +208,21 @@ class TimeFidelity:
         ax3d.set_xlabel("Activity", fontsize=15)
         ax3d.set_ylabel("Mobility", fontsize=15)
         ax3d.set_zlabel("Complexity", fontsize=15)
-        ax3d.legend(fontsize=12)
+        ax3d.legend(fontsize=15)
 
-        # Normalise y-limits across the 3 histogram axes (ignore the 3D axis)
-        #axes_2d = fig.axes[:-1]  # the first three are the histograms
-        #y_max = max(ax.get_ylim()[1] for ax in axes_2d)
-        #for ax in axes_2d:
-            #ax.set_ylim(0, y_max)
+        # Try to set 3D pane colors to white so it visually matches the white figure background
+        try:
+            ax3d.w_xaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+            ax3d.w_yaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+            ax3d.w_zaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+        except Exception:
+            # fallback for other mpl versions
+            try:
+                ax3d.xaxis.pane.fill = False
+                ax3d.yaxis.pane.fill = False
+                ax3d.zaxis.pane.fill = False
+            except Exception:
+                pass
 
         # Normalise y-limits only for Activity and Mobility (first two axes)
         axes_2d = fig.axes[:2]
@@ -212,9 +232,3 @@ class TimeFidelity:
 
         plt.tight_layout()
         plt.show()
-
-
-
-
-
-
