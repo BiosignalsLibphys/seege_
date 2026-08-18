@@ -2,8 +2,12 @@ from matplotlib import rcParams
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import welch, savgol_filter, coherence
-from scipy.integrate import simps
+try:
+    from scipy.integrate import simpson as simps  # SciPy >= 1.14 renamed simps -> simpson
+except ImportError:
+    from scipy.integrate import simps  # older SciPy
 from scipy.stats import shapiro, ttest_rel, wilcoxon, wasserstein_distance, mannwhitneyu
+from tqdm import tqdm
 
 
 # Set Arial as the default font
@@ -210,7 +214,8 @@ class FrequencyFidelity:
         if isinstance(data, np.ndarray) and data.ndim == 1:
             data = [data]
 
-        for sig in data:
+        iterable = tqdm(data, desc="Computing relative band power", unit="signal") if len(data) > 1 else data
+        for sig in iterable:
             f, pxx, f_sel, p_sel = self._compute_psd(sig, analysis_band, win_seconds, window, detrend, overlap)
             total = simps(p_sel, f_sel) if f_sel.size > 1 else 0.0
 
