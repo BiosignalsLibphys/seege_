@@ -40,32 +40,25 @@ class TimeFrequencyFidelity:
     ---------------------------------------------------------------
     The metric set is unchanged: SSIM, nRMSE and cosine similarity on scalograms,
     the RR/RS/SS protocol with Cliff's delta, and burst statistics compared with
-    SD-normalised Wasserstein distances. Only flaws in how they are computed or
-    tested were corrected:
+    SD-normalised Wasserstein distances. The corrections are:
 
-    * SSIM: computed on the normalised scalogram values (grayscale) by default. The
-      paper calls it colour SSIM (cSSIM); the colormap is a display choice whose
-      luminance is not monotonic in amplitude, so it should not drive the metric.
-      `color_ssim=True` reproduces the colour (terrain RGB) variant.
-    * Frequency grid: log-spaced by default (`freq_scale="log"`). The linear grid with
-      ~1 Hz spacing missed low-frequency peaks, whose wavelet bandwidth is ~f/6.
-    * Frequencies above 0.95 x Nyquist are dropped with a warning (no check before).
-    * Coefficient normalisation: `normalization="amplitude"` (default) makes a
-      sinusoid of amplitude A give |W| = A at every frequency. The published
-      sqrt(scale) ("energy") normalisation made amplitude grow as 1/sqrt(f), so low
-      frequencies dominated SSIM / NRMSE / cosine. Use `normalization="energy"` to
-      reproduce published scalograms.
-    * RR vs RS test, all_vs_all: permutation test over SIGNAL labels (pairs share
-      signals, so Mann-Whitney on pairs gave far too many false positives).
-      zip: Mann-Whitney + Cliff's delta (the paired Wilcoxon paired unrelated pairs).
-    * Burst statistics: one threshold derived from the POOLED REAL envelopes and
-      applied to both sets (per-signal thresholds fixed the duty cycle by
-      construction); merge-then-minimum-duration order; reflect-padded smoothing;
-      cone-of-influence edges trimmed; dedicated frequency grid inside the band.
-    * Memory: CWT computed in chunks, scalograms stored as float32; optional
-      `max_signals` and `decimate` for all_vs_all on long recordings.
-    * Mean scalograms: "power"/"db" use the mean of power, not the square of the mean
-      amplitude.
+    * SSIM is computed on the normalised scalogram values, independent of the
+      display colormap. `color_ssim=True` gives the published colour SSIM.
+    * Frequencies are log-spaced by default (`freq_scale="log"`), so low-frequency
+      peaks fall on the grid.
+    * Frequencies are capped at 0.95 x Nyquist, with a warning.
+    * Scalograms are amplitude-normalised (`normalization="amplitude"`): a sinusoid
+      of amplitude A gives |W| = A at every frequency, so no band dominates the
+      similarity metrics. `normalization="energy"` gives the published scaling.
+    * RR vs RS is tested with a permutation test over signal labels (all_vs_all)
+      and with Mann-Whitney + Cliff's delta (zip).
+    * Bursts are detected with one threshold from the pooled real envelopes,
+      applied to both sets. Gaps are merged before the minimum-duration filter,
+      smoothing uses reflect padding, edge effects (cone of influence) are trimmed,
+      and each band has its own frequency grid.
+    * The CWT runs in chunks and stores float32; `max_signals` and `decimate`
+      limit the cost of all_vs_all on long recordings.
+    * Mean scalograms in "power"/"db" use the mean of power.
 
     Parameters
     ----------
