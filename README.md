@@ -57,13 +57,14 @@ If you use seege_ in your work , please cite it as follows:
 Silveira, I., Silva, L., Furk, D. et al. Interpretable metrics for evaluating fidelity, diversity, and privacy in synthetic EEG data. Discov. Neurosci. 21, 96 (2026). https://doi.org/10.1186/s13064-026-00323-z
 
 ```bibtex
-@software{seege_2025,
-  title        = {seege_: a Python library for synthetic EEG evaluation},
-  author       = {Silveira, Inês and Silva, Luís and Gamboa, Hugo.},
-  year         = {2025},
-  url          = {https://github.com/BiosignalsLibphys/seege_},
-  version      = {0.1.0},
-  note         = {License: MIT}
+@article{silveira_26,
+  title={Interpretable metrics for evaluating fidelity, diversity, and privacy in synthetic EEG data},
+  author={Silveira, Ines and Silva, Luis and Furk, Dania and Marques, Beatriz and Ao, Nianfei, Hoogteijling, Sem and Heijink, Irene and Ziljmans, Maeike and Gamboa, Hugo},
+  journal={Discover Neuroscience},
+  volume={21},
+  year={2026},
+  doi={https://doi.org/10.1186/s13064-026-00323-z},
+  publisher={Elsevier}
 }
 
 
