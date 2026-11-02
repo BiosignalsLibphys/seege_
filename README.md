@@ -12,32 +12,42 @@ A Python-based framework for evaluating synthetic EEG signals along three dimens
 ## Installation
 
 seege_ requires **Python 3.10–3.12** (not 3.13, which some dependencies don't support yet).
-Clone the repo and install the dependencies in a virtual environment:
+We recommend installing it in a virtual environment:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -U pip
+```
+
+### Use the library
+
+Install directly from GitHub:
+
+```bash
+pip install git+https://github.com/BiosignalsLibphys/seege_.git
+```
+
+Then import it in Python:
+
+```python
+from seege_ import evaluation_score as es
+from seege_.preprocessing import load_pickle
+```
+
+### Reproduce our results or contribute
+
+Clone the repository and install it with the exact dependency versions used in our experiments:
 
 ```bash
 git clone https://github.com/BiosignalsLibphys/seege_.git
 cd seege_
-
-python3.11 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-pip install -U pip
 pip install -r requirements.txt
+pip install -e .
 ```
 
-To reproduce the metric validation experiments in `src/validation/`, install the extra dependencies:
-
-```bash
-pip install -r requirements-validation.txt
-```
-
-seege_ is not yet installable with `pip install seege_`. To use it, add `src/` to your Python path:
-
-```python
-import sys
-sys.path.insert(0, "path/to/seege_/src")
-import evaluation_score
-```
+`pip install -e .` installs seege_ in editable mode, so changes you make in `src/seege_/` take effect without reinstalling.
+The example data in `data/` and the notebooks in `examples/` are only available this way.
 
 ## Data format
 
@@ -59,17 +69,15 @@ You can load your own files (`.npy`, `.pkl`, etc.) with `preprocessing.load_nump
 ## Quick start
 
 ```python
-import sys
-sys.path.insert(0, "src")
+from seege_ import evaluation_score as es
+from seege_.preprocessing import load_pickle
 
-import evaluation_score as es
-from preprocessing import load_pickle
-
-real = load_pickle("mayo_epileptic_1000seg.pkl")[:100]
-synth = load_pickle("synthetic_mayo_epileptic_1000seg.pkl")[:100]
+real = load_pickle("data/mayo_epileptic_1000seg.pkl")[:100]
+synth = load_pickle("data/synthetic_mayo_epileptic_1000seg.pkl")[:100]
 
 fidelity = es.compute_fidelity_score(real, synth, fs=512)
 diversity = es.compute_diversity_score(real, synth)
+privacy = es.compute_privacy_score(real, synth))
 privacy = es.compute_privacy_score(real, synth)
 ```
 
