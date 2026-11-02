@@ -52,5 +52,3 @@ def minmax_normalize(data, axis=1):
     range_val = np.where((max_val - min_val) == 0, 1, (max_val - min_val))
     normalized = 2 * (data - min_val) / range_val - 1
     return normalized
-
-print('Data processed.')
