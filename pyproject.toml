@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seege"
+version = "0.1.0"
+description = "Evaluation of synthetic EEG: fidelity, diversity and privacy"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "LGPL-3.0" }
+authors = [{ name = "Inês Silveira" }, { name = "Luís Silva" }, { name = "Hugo Gamboa" }]
+dependencies = [
+    "fathon",
+    "matplotlib",
+    "neurokit2",
+    "numba",
+    "numpy<2",
+    "pandas",
+    "scikit-image",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "tqdm",
+    "umap-learn",
+]
+
+[project.optional-dependencies]
+validation = ["prdc", "prettytable", "sdmetrics", "joblib"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
