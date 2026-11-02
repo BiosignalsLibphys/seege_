@@ -54,6 +54,8 @@ Typical workflow
 ## Citation
 If you seege_ in your work , please cite it as follows:
 
+Silveira, I., Silva, L., Furk, D. et al. Interpretable metrics for evaluating fidelity, diversity, and privacy in synthetic EEG data. Discov. Neurosci. 21, 96 (2026). https://doi.org/10.1186/s13064-026-00323-z
+
 ```bibtex
 @software{seege_2025,
   title        = {seege_: a Python library for synthetic EEG evaluation},
