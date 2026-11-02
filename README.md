@@ -51,6 +51,9 @@ Typical workflow
    - Privacy (leakage/identifiability)
 3. Aggregate scores and compare across models/datasets.
 
+## License
+GNU Lesser General Public License v3.0
+
 ## Citation
 If you use seege_ in your work , please cite it as follows:
 
