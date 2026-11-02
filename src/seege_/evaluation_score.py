@@ -1,11 +1,11 @@
 
-from time_fidelity import *
-from frequency_fidelity import *
-from time_frequency_fidelity import *
-from complexity_fidelity import *
-from spatial_fidelity import *
-from diversity import *
-from privacy import *
+from .time_fidelity import *
+from .frequency_fidelity import *
+from .time_frequency_fidelity import *
+from .complexity_fidelity import *
+from .spatial_fidelity import *
+from .diversity import *
+from .privacy import *
 
 def _sim(a, b, eps=1e-12):
     """Normalised absolute-difference similarity in [0,1]."""
