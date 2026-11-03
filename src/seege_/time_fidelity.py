@@ -7,6 +7,11 @@ import matplotlib as mpl
 import seaborn as sns
 from scipy.stats import chi2
 
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
+
 # Set Arial font globally
 mpl.rcParams['font.family'] = 'Arial'
 
@@ -58,11 +63,13 @@ class TimeFidelity:
         Parameters
         ----------
         real_data : array
-            1D (T,) or 2D (N x T) real signals.
+            (N, T) or (N, C, T) real signals. With C > 1 every channel is one signal.
         synthetic_data : array
-            1D (T,) or 2D (N x T) synthetic signals.
+            (N, T) or (N, C, T) synthetic signals (same C and T as real_data).
 
         """
+        R, S = check_pair(real_data, synthetic_data)
+        real_data, synthetic_data = as_signals(R), as_signals(S)
         real_hjorth = np.array([self.hjorth_parameters(sig) for sig in real_data])
         syn_hjorth = np.array([self.hjorth_parameters(sig) for sig in synthetic_data])
 
@@ -142,10 +149,12 @@ class TimeFidelity:
         Parameters
         ----------
         real_signals : array-like
-            1D (T,) or 2D (N x T) real signals.
+            (N, T) or (N, C, T) real signals. With C > 1 every channel is one signal.
         synthetic_signals : array-like
-            1D (T,) or 2D (N x T) synthetic signals.
+            (N, T) or (N, C, T) synthetic signals.
         """
+        R, S = check_pair(real_signals, synthetic_signals)
+        real_signals, synthetic_signals = as_signals(R), as_signals(S)
         # Compute Hjorth parameters once
         real_hjorth = np.array([self.hjorth_parameters(sig) for sig in real_signals])
         synthetic_hjorth = np.array([self.hjorth_parameters(sig) for sig in synthetic_signals])
