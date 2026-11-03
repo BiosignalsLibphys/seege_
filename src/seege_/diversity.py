@@ -9,6 +9,11 @@ from sklearn.metrics import pairwise_distances, silhouette_samples
 from sklearn.neighbors import NearestNeighbors
 from umap import UMAP
 
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
+
 
 # =================================== NEW ===================================
 BANDS = [("Delta", 0.5, 4), ("Theta", 4, 8), ("Alpha", 8, 13), ("Beta", 13, 30),
@@ -202,13 +207,15 @@ class Diversity:
 
     def _represent(self, data):
         """NEW: signals -> feature matrix (representation="features"), else flatten."""
-        data = np.asarray(data, dtype=float)
+        data = np.asarray(data)
         if self.representation == "features":
             return diversity_features(data, fs=self.fs)
         return data.reshape(len(data), -1)
 
     def _prep(self, real_data, synthetic_data):
         """Represent (features or raw), then, if standardize, z-score both sets with REAL mean/SD."""
+        if self.representation == "features":
+            real_data, synthetic_data = check_pair(real_data, synthetic_data)         # (N,T) or (N,C,T)
         real = self._represent(real_data)                                             # CHANGED
         synth = self._represent(synthetic_data)                                       # CHANGED
         if real.shape[1] != synth.shape[1]:
