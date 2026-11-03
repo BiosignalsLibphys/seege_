@@ -59,8 +59,11 @@ Real and synthetic data are passed as NumPy arrays:
 | `(N, C, T)` | N segments with C channels of T samples |
 
 - Real and synthetic sets must share the same **sampling rate, segment length, channel order and preprocessing**. N can differ between the two sets.
-- Pass the sampling rate `fs` (in Hz) to the frequency, time-frequency and global fidelity scores.
+- Pass the sampling rate `fs` (in Hz) to the frequency, time-frequency, global fidelity and diversity scores.
+- With C > 1, the time, frequency, time-frequency and complexity metrics treat every channel of every segment as one signal (N × C signals); diversity and privacy use one feature vector per segment.
 - Spatial fidelity requires multichannel data (C ≥ 2). For single-channel data it is skipped and excluded from the global fidelity score.
+- A single segment is passed as `x[None, :]` (shape `(1, T)`), or `x[None]` for multichannel data.
+- Pairwise metrics (coherence, scalogram similarity, DCCA/MFDCCA) compare all pairs of signals, so their cost grows with the square of the number of signals. On large or multichannel datasets, pass `max_signals` (random subset with a fixed seed), e.g. `es.compute_fidelity_score(real, synth, fs=512, max_signals=200)`.
 - The membership-inference part of the privacy score needs the real data's task labels (`y_real`). Without them, only the distance-based privacy metrics are computed.
 - The example datasets are 1000 single-channel segments of 3 s at 512 Hz (`(1000, 1536)`), min–max normalised to [-1, 1]. `preprocessing.py` provides `minmax_normalize` and `downsample_signals` to bring your data to the same convention.
 
@@ -76,9 +79,8 @@ real = load_pickle("data/mayo_epileptic_1000seg.pkl")[:100]
 synth = load_pickle("data/synthetic_mayo_epileptic_1000seg.pkl")[:100]
 
 fidelity = es.compute_fidelity_score(real, synth, fs=512)
-diversity = es.compute_diversity_score(real, synth)
-privacy = es.compute_privacy_score(real, synth))
-privacy = es.compute_privacy_score(real, synth)
+diversity = es.compute_diversity_score(real, synth, fs=512)
+privacy, privacy_components = es.compute_privacy_score(real, synth)
 ```
 
 All scores are in [0, 1], where higher is better. Runtime grows quickly with N, especially for the complexity and time-frequency metrics, so start with a subset.
