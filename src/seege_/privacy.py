@@ -6,6 +6,11 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
+
 
 ArrayLike = np.ndarray | list
 
@@ -44,7 +49,7 @@ def _l2_nn_matrix(A: np.ndarray, B: np.ndarray, *, exclude_self: bool = False,
 
 
 def _cosine_nn_matrix(A: np.ndarray, B: np.ndarray, *, exclude_self: bool = False,
-                       eps: float = 1e-12):
+                       eps: float = 1e-12, desc: str | None = None):
     """Nearest-neighbour cosine distance, vectorized via a single matmul."""
     An = A / np.maximum(np.linalg.norm(A, axis=1, keepdims=True), eps)
     Bn = B / np.maximum(np.linalg.norm(B, axis=1, keepdims=True), eps)
@@ -164,6 +169,10 @@ class Privacy:
        - Modified entropy
        - Correctness
 
+    Input format: (N, T) or (N, C, T). Distances are computed between whole segments
+    (all channels of a segment form one vector). DTW is only defined here for
+    single-channel data (C = 1); with C > 1 it is skipped (NaN).
+
      WARNING: MIR REQUIRES TRUE LABELS (y_real)
        -----------------------------------
        MIR is defined with respect to a supervised classifier trained on REAL
@@ -213,12 +222,11 @@ class Privacy:
             - "zscore_global": z-score using global mean/std of REAL data
             - "zscore_per_signal": z-score each signal independently
         """
-        R = np.ascontiguousarray(real_data, dtype=np.float64)
-        S = np.ascontiguousarray(synthetic_data, dtype=np.float64)
-        if R.ndim == 1:
-            R = R[None, :]
-        if S.ndim == 1:
-            S = S[None, :]
+        R3, S3 = check_pair(real_data, synthetic_data)                 # (N, C, T)
+        self._n_channels = R3.shape[1]
+        # one vector per segment (all channels concatenated)
+        R = np.ascontiguousarray(R3.reshape(len(R3), -1), dtype=np.float64)
+        S = np.ascontiguousarray(S3.reshape(len(S3), -1), dtype=np.float64)
 
         if mode is None or mode == "none":
             return R, S
@@ -296,6 +304,12 @@ class Privacy:
 
         result = {}
         for name in metrics:
+            if name == "dtw" and getattr(self, "_n_channels", 1) > 1:
+                print("DTW skipped: only defined here for single-channel data (C = 1).")
+                for key in ("dtw", "dtw_min", "dtw_d", "dtw_rr_mean"):
+                    result[key] = np.nan
+                result["dtw_real_idx"] = result["dtw_synth_idx"] = -1
+                continue
             kernel, len_norm_supported = self._KERNELS[name]
             len_norm = length_normalize and len_norm_supported
 
@@ -324,6 +338,24 @@ class Privacy:
 
         print()
         return result
+
+    def compute_distance_effect_sizes(self, real_data, synthetic_data, *,
+                                      normalize: str | None = "zscore_global",
+                                      length_normalize: bool = True,
+                                      metrics: tuple = ("l2", "dtw")):
+        """
+        Effect sizes d (R-S vs R-R nearest-neighbour distances) per metric, in the
+        format used by evaluation_score.compute_privacy_score:
+            {"l2": {"effect_size_d": d, "mean_rs": ..., "mean_rr": ...}, "dtw": {...}}
+        (Wrapper around compute_distance_metrics; this method was called by the score
+        but missing from the class.)
+        """
+        res = self.compute_distance_metrics(real_data, synthetic_data, normalize=normalize,
+                                            length_normalize=length_normalize, metrics=metrics,
+                                            compute_effect_sizes=True)
+        return {m: {"effect_size_d": res.get(f"{m}_d", np.nan),
+                    "mean_rs": res.get(m, np.nan),
+                    "mean_rr": res.get(f"{m}_rr_mean", np.nan)} for m in metrics}
 
     # Membership inference (core engine, on feature matrices)
 
