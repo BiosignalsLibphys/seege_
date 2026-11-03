@@ -6,7 +6,13 @@ from scipy.signal import detrend
 import fathon
 from fathon import fathonUtils as fu
 import neurokit2 as nk
+import math
 from scipy.stats import wasserstein_distance, mannwhitneyu
+
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
 
 
 class ComplexityFidelity:
@@ -64,16 +70,21 @@ class ComplexityFidelity:
     * https://www.sciencedirect.com/science/article/pii/S2212017313006506
     """
 
-    def __init__(self, real_data=None, synthetic_data=None, method='DCCA', q_range=np.arange(-5,5,0.1), n_jobs=-1):
+    def __init__(self, real_data=None, synthetic_data=None, method='DCCA', q_range=np.arange(-5,5,0.1), n_jobs=-1,
+                 max_signals=None, seed=0):
         """
         Initializes the ComplexityFidelity class with real and synthetic signal data.
 
         Parameters
         ----------
         real_data : array
-            1D (T,) or 2D (N x T) real signals.
+            (N, T) or (N, C, T) real signals. With C > 1 every channel is one signal.
         synthetic_data : array
-            1D (T,) or 2D (N x T) synthetic signals.
+            (N, T) or (N, C, T) synthetic signals.
+        max_signals : int, optional
+            Random subset (fixed `seed`) of at most this many signals per set. DCCA and
+            MFDCCA compare all pairs, so their run time grows with the square of the
+            number of signals; use this with multichannel or long recordings.
 
         method : str, optional (default='DCCA')
             The fractal analysis method to use. Options:
@@ -84,6 +95,10 @@ class ComplexityFidelity:
             Range of q values for multifractal analysis (used in MFDFA, MFDCCA, etc.).
             Default is np.arange(-5,5,0.1).
         """
+        if real_data is not None and synthetic_data is not None:
+            R, S = check_pair(real_data, synthetic_data)
+            real_data = as_signals(R, max_signals=max_signals, seed=seed)
+            synthetic_data = as_signals(S, max_signals=max_signals, seed=seed + 1)
         self.real_data = real_data
         self.synthetic_data = synthetic_data
         self.method = method
@@ -883,7 +898,7 @@ class ComplexityFidelity:
         p /= p.sum()
         H = -np.sum(p * np.log(p + 1e-12))
         if normalize:
-            H /= np.log(np.math.factorial(m))
+            H /= np.log(math.factorial(m))   # np.math was removed in NumPy 2
         return float(H)
 
     @staticmethod
@@ -964,17 +979,19 @@ class ComplexityFidelity:
             permen_tau: int = 1,
             lzc_threshold: float | None = None,  # default = median(signal)
             n_surrogates: int = 0,  # set >0 to run surrogate nonlinearity check
-            verbose: bool = True
+            verbose: bool = True,
+            max_signals: int | None = None,
+            seed: int = 0,
     ):
         """
         Computes SampEn, PermEn, LZC on each signal; compares real vs synthetic
         distributions with Wasserstein Distance (WD). Optionally estimates a
         nonlinearity index via surrogate testing (z-scores).
         """
-        R = np.asarray(real_data, dtype=float)
-        S = np.asarray(synthetic_data, dtype=float)
-        if R.ndim == 1: R = R[None, :]
-        if S.ndim == 1: S = S[None, :]
+        # (N, T) or (N, C, T) -> one row per channel signal
+        R, S = check_pair(real_data, synthetic_data)
+        R = as_signals(R, max_signals=max_signals, seed=seed)
+        S = as_signals(S, max_signals=max_signals, seed=seed + 1)
 
         def _features(arr):
             se, pe, lz = [], [], []
