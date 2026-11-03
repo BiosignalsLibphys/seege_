@@ -1,6 +1,6 @@
 from time_fidelity import *
 from frequency_fidelity import *
-from time_frequency_fidelity_paper import *
+from time_frequency_fidelity import *
 from complexity_fidelity import *
 from spatial_fidelity import *
 from diversity_corrected import *
