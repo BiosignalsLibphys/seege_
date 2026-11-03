@@ -2,16 +2,22 @@ from matplotlib import rcParams
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import welch, savgol_filter, coherence
+
 try:
     from scipy.integrate import simpson as simps  # SciPy >= 1.14 renamed simps -> simpson
 except ImportError:
     from scipy.integrate import simps  # older SciPy
-from scipy.stats import shapiro, ttest_rel, wilcoxon, wasserstein_distance, mannwhitneyu
+from scipy.stats import shapiro, ttest_ind, wilcoxon, wasserstein_distance, mannwhitneyu
 from tqdm import tqdm
 
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
 
 # Set Arial as the default font
 rcParams['font.family'] = 'Arial'
+
 
 class FrequencyFidelity:
     """
@@ -22,7 +28,7 @@ class FrequencyFidelity:
     dominant frequencies, and performs statistical comparisons (normality,
     paired t-test / Wilcoxon). It can also compute coherence and approximate
     a Wasserstein distance (standardized by real–real (RR) variability) in the frequency domain.
-    
+
     Example Usage:
     --------------
     real_data = np.random.randn(10, 2048)  # 10 real signals, each 2048 samples
@@ -92,12 +98,16 @@ class FrequencyFidelity:
 
     def compute_cohens_d(self, real_vals, synthetic_vals):
         """
-        Compute Cohen's d for paired samples (effect size).
+        Cohen's d for two independent samples (pooled SD). Real and synthetic
+        signals are not paired, and the two sets may differ in size.
         """
-        differences = np.array(real_vals) - np.array(synthetic_vals)
-        mean_diff = np.mean(differences)
-        std_diff = np.std(differences, ddof=1)
-        return mean_diff / std_diff if std_diff != 0 else np.nan
+        r = np.asarray(real_vals, dtype=float)
+        s = np.asarray(synthetic_vals, dtype=float)
+        nr, ns = r.size, s.size
+        if nr < 2 or ns < 2:
+            return np.nan
+        pooled = np.sqrt(((nr - 1) * r.var(ddof=1) + (ns - 1) * s.var(ddof=1)) / (nr + ns - 2))
+        return float((r.mean() - s.mean()) / pooled) if pooled > 0 else np.nan
 
     def _resolve_params(self, analysis_band=None, win_seconds=None, window=None, detrend=None, overlap=None):
         """
@@ -136,7 +146,6 @@ class FrequencyFidelity:
         stat = mannwhitneyu(rr, rs, alternative="two-sided")
         cd = self._cliffs_delta(rr, rs)
         return {"p": float(stat.pvalue), "cliffs_delta": float(cd), "test": "MWU"}
-
 
     def _compute_psd(self, sig,
                      analysis_band=None, win_seconds=None, window=None, detrend=None, overlap=None):
@@ -193,7 +202,7 @@ class FrequencyFidelity:
         return ((f_sel >= lo) & (f_sel <= hi)) if right_closed else ((f_sel >= lo) & (f_sel < hi))
 
     def compute_relative_power(self, data, analysis_band, win_seconds, window, detrend,
-                                                            overlap):
+                               overlap):
         """
         Compute the relative power for different frequency bands
         (Delta, Theta, Alpha, Beta, Gamma, Ripple and Fast Ripple) and determine the dominant frequency.
@@ -210,9 +219,8 @@ class FrequencyFidelity:
         rel_power = {name: [] for name in self.band_names}
         dominant_freq = []
 
-        # ensure iterable
-        if isinstance(data, np.ndarray) and data.ndim == 1:
-            data = [data]
+        # (N, T) or (N, C, T) -> one row per channel signal
+        data = as_signals(data)
 
         iterable = tqdm(data, desc="Computing relative band power", unit="signal") if len(data) > 1 else data
         for sig in iterable:
@@ -234,17 +242,26 @@ class FrequencyFidelity:
 
     def test_normality(self, real_power, synthetic_power):
         """
-        Test the normality of the differences between real and synthetic relative power.
+        Shapiro-Wilk normality test of the relative power in each set (real and
+        synthetic separately; the sets are independent and may differ in size).
+        'p-value' is the smaller of the two p-values (None if a set has < 3 values).
         """
+        def _shapiro(x):
+            x = np.asarray(x, dtype=float)
+            x = x[np.isfinite(x)]
+            if x.size < 3 or np.ptp(x) == 0:
+                return None
+            if x.size > 5000:   # Shapiro-Wilk is defined up to 5000 samples
+                x = np.random.default_rng(0).choice(x, 5000, replace=False)
+            return float(shapiro(x)[1])
+
         results = {}
         for band in real_power.keys():
-            differences = np.array(real_power[band]) - np.array(synthetic_power[band])
-            if len(differences) < 3:
-                results[band] = {"statistic": None, "p-value": None}
-            else:
-                stat, p_value = shapiro(differences)
-                results[band] = {"statistic": stat, "p-value": p_value}
+            p_r, p_s = _shapiro(real_power[band]), _shapiro(synthetic_power[band])
+            p = None if (p_r is None or p_s is None) else min(p_r, p_s)
+            results[band] = {"p_real": p_r, "p_synthetic": p_s, "p-value": p}
         return results
+
 
     def perform_statistical_tests(self, real_power, synthetic_power, normality_results, alpha: float = 0.05):
         """
@@ -276,14 +293,14 @@ class FrequencyFidelity:
             if len(real_vals) < 2 or len(synthetic_vals) < 2:
                 continue
 
-            # If normal => paired t-test, else => Wilcoxon
+            # Independent samples: Welch's t-test if both sets look normal, else Mann-Whitney U
             if normality_results[band]["p-value"] is not None and \
                     normality_results[band]["p-value"] > alpha:
-                stat, p_value = ttest_rel(real_vals, synthetic_vals)
-                test_type = "Paired t-test"
+                stat, p_value = ttest_ind(real_vals, synthetic_vals, equal_var=False)
+                test_type = "Welch t-test"
             else:
-                stat, p_value = wilcoxon(real_vals, synthetic_vals)
-                test_type = "Wilcoxon"
+                stat, p_value = mannwhitneyu(real_vals, synthetic_vals, alternative="two-sided")
+                test_type = "Mann-Whitney U"
 
             # Effect size
             d = self.compute_cohens_d(real_vals, synthetic_vals)
@@ -295,9 +312,9 @@ class FrequencyFidelity:
             # Keep original keys for compatibility + add new ones
             test_results[band] = {
                 "test": test_type,
-                "statistic": f"{stat:.3f}",           # string, for backwards compatibility
-                "p-value": self._format_p(p_value),   # formatted string
-                "p_raw": float(p_value),              # raw float p-value
+                "statistic": f"{stat:.3f}",  # string, for backwards compatibility
+                "p-value": self._format_p(p_value),  # formatted string
+                "p_raw": float(p_value),  # raw float p-value
                 "cohens_d": d,
                 "alpha": alpha,
                 "significant": significant,
@@ -310,11 +327,14 @@ class FrequencyFidelity:
                                analysis_band=None, win_seconds=None, window=None, detrend=None, overlap=None):
         """
         Computes relative power for real and synthetic data, tests normality,
-        and performs statistical tests (only if data are 2D).
+        and performs statistical tests (only with more than one signal per set).
+
+        real_data, synthetic_data : (N, T) or (N, C, T). With C > 1 every channel is one signal.
         """
-        # 1D => single sample => no stats
-        if (isinstance(real_data, np.ndarray) and real_data.ndim == 1) or \
-                (isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1):
+        R, S = check_pair(real_data, synthetic_data)
+        real_data, synthetic_data = as_signals(R), as_signals(S)
+        # a single signal per set => no stats
+        if len(real_data) == 1 or len(synthetic_data) == 1:
             _, _, real_power, _ = self.compute_relative_power(real_data, analysis_band, win_seconds, window,
                                                               detrend, overlap)
             _, _, synth_power, _ = self.compute_relative_power(synthetic_data, analysis_band, win_seconds, window,
@@ -352,9 +372,12 @@ class FrequencyFidelity:
 
         return statistical_tests
 
-    def spectral_coherence(self, real_signals, synthetic_signals, *, mode: str = "all_vs_all", rr_zip_strategy: str = "consecutive",
-            ss_zip_strategy: str = "consecutive", per_band: bool = True, analysis_band=None, win_seconds = None, window = None,
-            detrend = None, overlap = None,  pair_label: str = "RS"):
+    def spectral_coherence(self, real_signals, synthetic_signals, *, mode: str = "all_vs_all",
+                           rr_zip_strategy: str = "consecutive",
+                           ss_zip_strategy: str = "consecutive", per_band: bool = True, analysis_band=None,
+                           win_seconds=None, window=None,
+                           detrend=None, overlap=None, pair_label: str = "RS",
+                           max_signals: int | None = None, seed: int = 0):
         """
         Compute spectral coherence between real and synthetic signals.
 
@@ -370,9 +393,13 @@ class FrequencyFidelity:
         Parameters
         ----------
         real_signals : array
-            1D (T,) or 2D (N x T) real signals.
+            (N, T) or (N, C, T) real signals. With C > 1 every channel is one signal.
         synthetic_signals : array
-            1D (T,) or 2D (N x T) synthetic signals.
+            (N, T) or (N, C, T) synthetic signals.
+        max_signals : int, optional
+            Random subset (fixed `seed`) of at most this many signals per set. The number
+            of pairs grows with the square of the number of signals, so use this with
+            multichannel data (e.g. max_signals=200).
         mode : {"all_vs_all","zip"}, default "all_vs_all"
             Pairing strategy applied to RS, RR and SS.
         rr_zip_strategy, ss_zip_strategy : {"consecutive","halves"}
@@ -395,11 +422,9 @@ class FrequencyFidelity:
         - Windowing and overlap come from `_resolve_params`, consistent with PSD methods.
         """
 
-        # Normalize to 2D
-        R = np.asarray(real_signals, dtype=float)
-        S = np.asarray(synthetic_signals, dtype=float)
-        if R.ndim == 1: R = R[np.newaxis, :]
-        if S.ndim == 1: S = S[np.newaxis, :]
+        R, S = check_pair(real_signals, synthetic_signals)
+        R = as_signals(R, max_signals=max_signals, seed=seed)
+        S = as_signals(S, max_signals=max_signals, seed=seed + 1)
 
         analysis_type = "sample" if R.shape[0] == 1 and S.shape[0] == 1 else "dataset"
         nR, nS = R.shape[0], S.shape[0]
@@ -644,11 +669,9 @@ class FrequencyFidelity:
             z_WD = (mean(WD_RS) - mean(WD_RR)) / std(WD_RR)
         """
 
-        # Wrap single signals
-        if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
-            real_data = [real_data]
-        if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
-            synthetic_data = [synthetic_data]
+        # (N, T) or (N, C, T) -> one row per channel signal
+        R, S = check_pair(real_data, synthetic_data)
+        real_data, synthetic_data = as_signals(R), as_signals(S)
 
         nyq = self.fs / 2.0
         fmax = min(fmax, nyq)
@@ -724,7 +747,8 @@ class FrequencyFidelity:
         print(f"Standardised WD (RR baseline): z = {z_wd:.2f}")
         return dict(WD_Hz=wd_rs, z_WD=z_wd)
 
-    def plot_psd(self, real_data, synthetic_data, scale="linear",smooth=False, window_length=11, polyorder=2,xlim=None, ylim=None, analysis_band=None):
+    def plot_psd(self, real_data, synthetic_data, scale="linear", smooth=False, window_length=11, polyorder=2,
+                 xlim=None, ylim=None, analysis_band=None):
         """
         Plots the power spectral density (PSD) for real and synthetic data on a specified scale.
 
@@ -750,11 +774,9 @@ class FrequencyFidelity:
         if scale not in ("linear", "log"):
             raise ValueError("scale must be 'linear' or 'log'.")
 
-        # Wrap single signals
-        if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
-            real_data = [real_data]
-        if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
-            synthetic_data = [synthetic_data]
+        # (N, T) or (N, C, T) -> one row per channel signal
+        R, S = check_pair(real_data, synthetic_data)
+        real_data, synthetic_data = as_signals(R), as_signals(S)
 
         analysis_type = "sample" if len(real_data) == 1 and len(synthetic_data) == 1 else "dataset"
 
