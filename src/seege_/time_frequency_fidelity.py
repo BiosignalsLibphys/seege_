@@ -7,7 +7,10 @@ from scipy.ndimage import uniform_filter1d
 from skimage.metrics import structural_similarity as ssim, mean_squared_error
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.stats import mannwhitneyu
-from ._input import check_pair, as_signals
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
 
 try:
     from tqdm import tqdm
@@ -85,6 +88,11 @@ class TimeFrequencyFidelity:
 
     To reproduce the published scalograms and cSSIM:
         TimeFrequencyFidelity(fs=..., freq_scale="linear", normalization="energy", color_ssim=True)
+
+    Input format
+    ------------
+    All public methods accept (N, T) or (N, C, T) arrays. With C > 1 every channel of
+    every segment is one signal (N*C signals); signal k is segment k // C, channel k % C.
 
     Example
     -------
@@ -319,42 +327,44 @@ class TimeFrequencyFidelity:
 
     def compute_mean_scalogram(self, signals, *, frequencies=None, return_power: bool = False):
         """
-        Mean scalogram across signals (1D, 2D (N, T) or list of equal-length 1D arrays).
+        Mean scalogram across signals ((N, T) or (N, C, T); every channel is one signal).
 
         Returns (mean_amplitude, F), or (mean_amplitude, mean_power, F) if return_power.
         """
         if signals is None:
             raise ValueError("`signals` cannot be None.")
-        if isinstance(signals, (list, tuple)):
-            arr_list = [np.asarray(x).reshape(-1) for x in signals]
-            if len({a.shape[0] for a in arr_list}) > 1:
-                raise ValueError("All signals must have the same length (scalogram shapes must match).")
-            arr = np.stack(arr_list, axis=0)
-        else:
-            arr = np.asarray(signals)
-            if arr.ndim == 1:
-                arr = arr[np.newaxis, :]
-            elif arr.ndim != 2:
-                raise ValueError("`signals` must be 1D, 2D, or a list of 1D arrays.")
+        arr = as_signals(signals)                       # (N, T) or (N, C, T) -> (N*C, T)
         if arr.shape[0] == 0:
             raise ValueError("`signals` is empty.")
 
         F = self.frequencies if frequencies is None else frequencies
-        amp = self._cwt_fft_batch(arr, frequencies=F).astype(np.float64)
-        mean_amp = amp.mean(axis=0)
+        # Running sums over chunks of signals: memory no longer grows with the number of signals
+        chunk = 16
+        sum_amp, sum_pow = None, None
+        for start in range(0, arr.shape[0], chunk):
+            amp = self._cwt_fft_batch(arr[start:start + chunk], frequencies=F).astype(np.float64)
+            a, p = amp.sum(axis=0), (amp ** 2).sum(axis=0)
+            sum_amp = a if sum_amp is None else sum_amp + a
+            sum_pow = p if sum_pow is None else sum_pow + p
+        mean_amp = sum_amp / arr.shape[0]
         if return_power:
-            return mean_amp, (amp ** 2).mean(axis=0), F
+            return mean_amp, sum_pow / arr.shape[0], F
         return mean_amp, F
 
     def plot_mean_scalograms(self, real_data, synthetic_data, *, save: str | None = None,
                              titles=("Mean real", "Mean synthetic"), freq_scale: str | None = None,
-                             intensity: str | None = None, db_ref: str | float | None = None):
-        """Plot mean scalograms of the real and synthetic sets ("power"/"db" = mean power)."""
+                             intensity: str | None = None, db_ref: str | float | None = None,
+                             max_signals: int | None = None, seed: int = 0):
+        """
+        Plot mean scalograms of the real and synthetic sets ("power"/"db" = mean power).
+        max_signals: optional random subset (fixed seed) of signals per set, for speed.
+        """
         freq_scale = freq_scale or self.freq_scale
         intensity = intensity or "amplitude"
         db_ref = "global_max" if db_ref is None else db_ref
         R, S = check_pair(real_data, synthetic_data)
-        real_data, synthetic_data = as_signals(R), as_signals(S)
+        real_data = as_signals(R, max_signals=max_signals, seed=seed)
+        synthetic_data = as_signals(S, max_signals=max_signals, seed=seed + 1)
 
         F = self._build_frequency_grid(freq_scale, self.num_freqs)
         r_amp, r_pow, _ = self.compute_mean_scalogram(real_data, frequencies=F, return_power=True)
@@ -657,7 +667,8 @@ class TimeFrequencyFidelity:
     def compute_burst_statistics(self, real_data, synthetic_data, *, band=(13.0, 30.0), threshold="percentile",
                                  p=75.0, kappa=2.0, min_duration_ms=20.0, merge_gap_ms=50.0,
                                  freq_scale: str | None = None, smooth_ms: float = 20.0,
-                                 n_band_freqs: int = 10, trim_coi: bool = True, verbose: bool = True):
+                                 n_band_freqs: int = 10, trim_coi: bool = True, verbose: bool = True,
+                                 max_signals: int | None = None, seed: int = 0):
         """
         Burst statistics in a frequency band, with ONE threshold derived from the pooled
         real envelopes and applied to both sets.
@@ -677,7 +688,8 @@ class TimeFrequencyFidelity:
         from scipy.stats import wasserstein_distance as WD
 
         R, S = check_pair(real_data, synthetic_data)
-        R, S = as_signals(R), as_signals(S)
+        R = as_signals(R, max_signals=max_signals, seed=seed)
+        S = as_signals(S, max_signals=max_signals, seed=seed + 1)
 
         f_lo, f_hi = float(band[0]), float(band[1])
         if f_lo <= 0 or f_hi <= f_lo:
@@ -688,9 +700,10 @@ class TimeFrequencyFidelity:
         trim = int(np.ceil(np.sqrt(2) * self._scales([f_lo])[0])) if trim_coi else 0
 
         def _envelopes(X, desc):
-            amp = self._cwt_fft_batch(X, frequencies=F)
-            envs = [self._band_envelope(amp[i], smooth_ms, trim)
-                    for i in tqdm(range(X.shape[0]), desc=desc, disable=not verbose)]
+            envs, chunk = [], 32                       # chunks keep memory bounded
+            for start in tqdm(range(0, X.shape[0], chunk), desc=desc, disable=not verbose):
+                amp = self._cwt_fft_batch(X[start:start + chunk], frequencies=F)
+                envs.extend(self._band_envelope(a, smooth_ms, trim) for a in amp)
             if len(envs[0]) == 0:
                 raise ValueError("Signals are too short for this band after cone-of-influence trimming; "
                                  "use trim_coi=False or a higher band.")
