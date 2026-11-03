@@ -7,6 +7,7 @@ from scipy.ndimage import uniform_filter1d
 from skimage.metrics import structural_similarity as ssim, mean_squared_error
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.stats import mannwhitneyu
+from ._input import check_pair, as_signals
 
 try:
     from tqdm import tqdm
@@ -298,8 +299,8 @@ class TimeFrequencyFidelity:
         intensity = intensity or "amplitude"
         db_ref = "global_max" if db_ref is None else db_ref
 
-        real_data = np.asarray(real_data)
-        synthetic_data = np.asarray(synthetic_data)
+        R, S = check_pair(real_data, synthetic_data)
+        real_data, synthetic_data = as_signals(R), as_signals(S)
         real_signal = real_data[signal_index_real] if real_data.ndim > 1 else real_data
         synthetic_signal = synthetic_data[signal_index_synth] if synthetic_data.ndim > 1 else synthetic_data
 
@@ -352,6 +353,8 @@ class TimeFrequencyFidelity:
         freq_scale = freq_scale or self.freq_scale
         intensity = intensity or "amplitude"
         db_ref = "global_max" if db_ref is None else db_ref
+        R, S = check_pair(real_data, synthetic_data)
+        real_data, synthetic_data = as_signals(R), as_signals(S)
 
         F = self._build_frequency_grid(freq_scale, self.num_freqs)
         r_amp, r_pow, _ = self.compute_mean_scalogram(real_data, frequencies=F, return_power=True)
@@ -363,8 +366,7 @@ class TimeFrequencyFidelity:
         real_int = self._to_intensity(r_amp, r_pow, intensity=intensity, db_ref=db_ref, ref_value=ref)
         synth_int = self._to_intensity(s_amp, s_pow, intensity=intensity, db_ref=db_ref, ref_value=ref)
 
-        real = np.asarray(real_data) if not isinstance(real_data, (list, tuple)) else np.asarray(real_data[0])
-        T = real.shape[-1]
+        T = real_data.shape[-1]
         return self._plot_pair(real_int, synth_int, F, T,
                                (f'{titles[0]} scalogram', f'{titles[1]} scalogram'),
                                freq_scale, intensity, save)
@@ -438,10 +440,9 @@ class TimeFrequencyFidelity:
                       number of SSIM calls grows as N^2.
         decimate    : keep every `decimate`-th scalogram column (speed/memory).
         """
-        R = np.asarray(real_data, dtype=float)
-        S = np.asarray(synthetic_data, dtype=float)
-        if R.ndim == 1: R = R[np.newaxis, :]
-        if S.ndim == 1: S = S[np.newaxis, :]
+        R, S = check_pair(real_data, synthetic_data)
+        R, S = as_signals(R), as_signals(S)
+
         if R.shape[0] == 0 or S.shape[0] == 0:
             raise ValueError("Both real_signals and synthetic_signals must contain at least one signal.")
         if mode not in {"all_vs_all", "zip"}:
@@ -675,10 +676,8 @@ class TimeFrequencyFidelity:
         """
         from scipy.stats import wasserstein_distance as WD
 
-        R = np.asarray(real_data, dtype=float)
-        S = np.asarray(synthetic_data, dtype=float)
-        if R.ndim == 1: R = R[np.newaxis, :]
-        if S.ndim == 1: S = S[np.newaxis, :]
+        R, S = check_pair(real_data, synthetic_data)
+        R, S = as_signals(R), as_signals(S)
 
         f_lo, f_hi = float(band[0]), float(band[1])
         if f_lo <= 0 or f_hi <= f_lo:
