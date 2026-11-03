@@ -3,7 +3,7 @@ from frequency_fidelity import *
 from time_frequency_fidelity import *
 from complexity_fidelity import *
 from spatial_fidelity import *
-from diversity_corrected import *
+from diversity import *
 from privacy import *
 from _input import check_pair, as_signals, as_NCT
 
