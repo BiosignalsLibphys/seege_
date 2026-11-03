@@ -1,43 +1,17 @@
-
-from .time_fidelity import *
-from .frequency_fidelity import *
-from .time_frequency_fidelity import *
-from .complexity_fidelity import *
-from .spatial_fidelity import *
-from .diversity import *
-from .privacy import *
+from time_fidelity import *
+from frequency_fidelity import *
+from time_frequency_fidelity_paper import *
+from complexity_fidelity import *
+from spatial_fidelity import *
+from diversity_corrected import *
+from privacy import *
+from _input import check_pair, as_signals, as_NCT
 
 def _sim(a, b, eps=1e-12):
     """Normalised absolute-difference similarity in [0,1]."""
     return 1.0 - np.abs(a - b) / (np.abs(a) + np.abs(b) + eps)
 
-def as_NT(x, *, name="data"):
-    """Return data as (N,T). Accepts (T,), (N,T), (N,1,T), (C,T) [single sample multi-channel not allowed]."""
-    x = np.asarray(x)
-    if x.ndim == 1:
-        return x[None, :]
-    if x.ndim == 2:
-        # interpret as (N,T)
-        return x
-    if x.ndim == 3:
-        # (N,C,T) -> only allowed if C==1
-        if x.shape[1] != 1:
-            raise ValueError(f"{name}: cannot convert multichannel (N,C,T) with C={x.shape[1]} to (N,T) without a reduction.")
-        return x[:, 0, :]
-    raise ValueError(f"{name}: unsupported shape {x.shape} for as_NT")
-
-def as_NCT(x, *, name="data"):
-    """Return data as (N,C,T). Accepts (C,T), (N,C,T), (N,T) [assumes C=1]."""
-    x = np.asarray(x)
-    if x.ndim == 2:
-        # Could be (N,T) or (C,T). We disambiguate by assuming it's (N,T) and make it (N,1,T)
-        # If you want to allow (C,T) single sample, pass explicitly with a flag (see below).
-        return x[:, None, :]
-    if x.ndim == 3:
-        return x
-    if x.ndim == 1:
-        return x[None, None, :]
-    raise ValueError(f"{name}: unsupported shape {x.shape} for as_NCT")
+# Input format for every score: (N, T) or (N, C, T); see _input.py.
 
 def _entropy_weights(values, eps=1e-12):
     """
@@ -210,7 +184,7 @@ def compute_time_fidelity_score(real_data, synthetic_data, weights=None):
 
     return time_fidelity_score
 
-def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None):
+def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None, max_signals=None):
     """
     Compute a similarity score between real and synthetic signals that blends
     spectral-band power, dominant frequency, coherence and a PSD–Wasserstein
@@ -338,11 +312,9 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
         weights = {k: float(v) / wsum for k, v in weights.items()}
 
 
-    # Shape handling
-    if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
-        real_data = [real_data]
-    if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
-        synthetic_data = [synthetic_data]
+    # Shape handling: (N, T) or (N, C, T) -> one row per channel signal
+    R, S = check_pair(real_data, synthetic_data)
+    real_data, synthetic_data = as_signals(R), as_signals(S)
 
 
     # 1) Relative power
@@ -387,7 +359,8 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
         win_seconds=2.0,
         window=window,
         detrend=detrend,
-        overlap=overlap
+        overlap=overlap,
+        max_signals=max_signals,   # pairwise: cap the number of signals if set
     )
 
     # Robustly extract and validate coherence scalar
@@ -434,7 +407,7 @@ def compute_frequency_fidelity_score(real_data, synthetic_data, fs, weights=None
 
 def compute_time_frequency_fidelity_score(real_data, synthetic_data, fs, *, weights=None, mode: str = "auto",
     pad: bool = True, rr_zip_strategy: str = "consecutive", ss_zip_strategy: str = "consecutive", return_sd: bool = False,
-    return_per_pair: bool = False, verbose: bool = True):
+    return_per_pair: bool = False, verbose: bool = True, max_signals=None):
     """
     Composite time-frequency fidelity score for 1-D or 2-D inputs (Eq. 3).
     Reuses `compute_scalogram_similarity_metrics` and combines the RS per-pair metrics:
@@ -500,13 +473,10 @@ def compute_time_frequency_fidelity_score(real_data, synthetic_data, fs, *, weig
     w_rmse = float(weights['rmse']) / wsum
     w_cos = float(weights['cosine_similarity']) / wsum
 
-    # Normalize inputs: auto-wrap 1-D → (1, T)
-    R = np.asarray(real_data, dtype=float)
-    S = np.asarray(synthetic_data, dtype=float)
-    if R.ndim == 1:
-        R = R[None, :]
-    if S.ndim == 1:
-        S = S[None, :]
+    # Inputs: (N, T) or (N, C, T); every channel is one signal (optional random subset)
+    R, S = check_pair(real_data, synthetic_data)
+    R = as_signals(R, max_signals=max_signals, seed=0)
+    S = as_signals(S, max_signals=max_signals, seed=1)
 
     # Pairing
     eff_mode = "all_vs_all" if mode == "auto" else mode
@@ -555,7 +525,8 @@ def compute_complexity_fidelity_score(
         real_data,
         synthetic_data,
         q_range=np.arange(-5, 5, 0.1),
-        weights=None
+        weights=None,
+        max_signals=None,
     ):
     """
     Complexity fidelity score combining fractal and entropy/complexity similarities.
@@ -574,11 +545,10 @@ def compute_complexity_fidelity_score(
             'sampen': 1/6, 'permen': 1/6, 'lzc': 1/6
         }
 
-    # Wrap 1D arrays
-    if isinstance(real_data, np.ndarray) and real_data.ndim == 1:
-        real_data = [real_data]
-    if isinstance(synthetic_data, np.ndarray) and synthetic_data.ndim == 1:
-        synthetic_data = [synthetic_data]
+    # (N, T) or (N, C, T) -> one row per channel signal (optionally a random subset)
+    R, S = check_pair(real_data, synthetic_data)
+    real_data = as_signals(R, max_signals=max_signals, seed=0)
+    synthetic_data = as_signals(S, max_signals=max_signals, seed=1)
 
     # Helpers
     def _sim_range(a, b, lo, hi):
@@ -701,9 +671,9 @@ def compute_spatial_fidelity_score(real_data, synthetic_data):
     Parameters
     ----------
     real_data : array-like
-        Shape (N, C, T) or (C, T)
+        Shape (N, C, T), C >= 2 (not defined for single-channel data)
     synthetic_data : array-like
-        Shape (N, C, T) or (C, T)
+        Shape (N, C, T), same C and T
 
     Returns
     -------
@@ -711,21 +681,9 @@ def compute_spatial_fidelity_score(real_data, synthetic_data):
         Spatial fidelity score in [0,1]
     """
 
-    real_data = np.asarray(real_data)
-    synthetic_data = np.asarray(synthetic_data)
-
-    if real_data.ndim == 2:
-        # ambiguous: could be (C,T) or (N,T)
-        # spatial fidelity is only valid if axis 0 == channels
-        if real_data.shape[0] < 2:
-            raise ValueError("Need at least 2 channels for spatial fidelity.")
-        # optional: enforce expected C
-        # if real_data.shape[0] != expected_C: raise ...
-    elif real_data.ndim == 3:
-        if real_data.shape[1] < 2:
-            raise ValueError("Need at least 2 channels for spatial fidelity.")
-    else:
-        raise ValueError(f"Invalid real_data shape {real_data.shape}; expected 2D or 3D.")
+    real_data, synthetic_data = check_pair(real_data, synthetic_data)
+    if real_data.shape[1] < 2:
+        raise ValueError("Spatial fidelity needs multichannel data (N, C, T) with C >= 2.")
 
     spatial_eval = SpatialFidelity()
     results = spatial_eval.evaluate(real_data, synthetic_data)
@@ -742,7 +700,7 @@ def compute_spatial_fidelity_score(real_data, synthetic_data):
 use_adaptive_weights = False
 
 def compute_fidelity_score(real_data, synthetic_data, fs, use_adaptive_weights=True,
-                           spatial_requires_multichannel=True):
+                           spatial_requires_multichannel=True, max_signals=None):
     """
     Computes global fidelity score using entropy-adaptive weighting
     and weighted geometric aggregation.
@@ -769,18 +727,13 @@ def compute_fidelity_score(real_data, synthetic_data, fs, use_adaptive_weights=T
 
     evaluation_score.compute_fidelity_score(real_data, synthetic_data, fs=2048)
     """
-    # Univariate view for most metrics
-    real_u = as_NT(real_data, name="real_data")
-    syn_u = as_NT(synthetic_data, name="synthetic_data")
+    # (N, T) or (N, C, T); each domain handles the channels itself
+    real_m, syn_m = check_pair(real_data, synthetic_data)
 
-    time_sim = compute_time_fidelity_score(real_data, synthetic_data)
-    freq_sim = compute_frequency_fidelity_score(real_data, synthetic_data, fs)
-    scalogram_sim = compute_time_frequency_fidelity_score(real_data, synthetic_data, fs)
-    fractal_sim = compute_complexity_fidelity_score(real_data, synthetic_data)
-
-    # Multichannel view for spatial
-    real_m = as_NCT(real_data, name="real_data")
-    syn_m = as_NCT(synthetic_data, name="synthetic_data")
+    time_sim = compute_time_fidelity_score(real_m, syn_m)
+    freq_sim = compute_frequency_fidelity_score(real_m, syn_m, fs, max_signals=max_signals)
+    scalogram_sim = compute_time_frequency_fidelity_score(real_m, syn_m, fs, max_signals=max_signals)
+    fractal_sim = compute_complexity_fidelity_score(real_m, syn_m, max_signals=max_signals)
 
     # Decide what to do if C<2
     if real_m.shape[1] < 2 or syn_m.shape[1] < 2:
@@ -824,7 +777,7 @@ def compute_fidelity_score(real_data, synthetic_data, fs, use_adaptive_weights=T
     return fidelity_score
 
 def compute_diversity_score(real_data, synthetic_data, weights=None, n_components=2,
-                            use_adaptive_weights=False, floor=0.01, return_components=False):
+                            use_adaptive_weights=False, floor=0.01, return_components=False, fs=512):
     """
     Composite diversity score combining coverage, geometric and intrinsic
     diversity components.
@@ -842,9 +795,11 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
     Parameters
     ----------
     real_data : np.ndarray
-        Real signals of shape [n_signals, n_samples].
+        Real signals (N, T) or (N, C, T).
     synthetic_data : np.ndarray
-        Synthetic signals of shape [n_signals, n_samples].
+        Synthetic signals (N, T) or (N, C, T), same C and T.
+    fs : float
+        Sampling rate in Hz, used to compute the band-power features (default 512).
     weights : dict, optional
         Weights for the subscores (keys as listed above), e.g. obtained with
         `_entropy_weights_matrix` across validation conditions.
@@ -893,7 +848,7 @@ def compute_diversity_score(real_data, synthetic_data, weights=None, n_component
         return float(np.exp(-abs(np.log(ratio))))
 
     # Diversity metrics
-    div = Diversity(n_components=n_components)
+    div = Diversity(n_components=n_components, fs=fs)
     m_cov = div.compute_coverage_diversity(real_data, synthetic_data)
     m_geom = div.compute_geometric_diversity(real_data, synthetic_data)
     m_intr = div.compute_intrinsic_diversity(real_data, synthetic_data)
@@ -952,6 +907,7 @@ def compute_privacy_score(
     normalize: str | None = "zscore_global",
     length_normalize: bool = True,
     weights: dict | None = None,
+    metrics: tuple = ("l2", "dtw"),
 ) -> tuple[float, dict]:
     """
     Composite privacy score in [0, 1]; higher = safer.
@@ -962,6 +918,10 @@ def compute_privacy_score(
       - DTW effect size d_DTW    (same)
       - Optional: MIR (1 - attack accuracy),
         if y_real (labels) is provided.
+
+    Input: (N, T) or (N, C, T). DTW is skipped (NaN) for multichannel data and for
+    metrics not listed in `metrics`; NaN components are left out of the score.
+    DTW is O(T^2) per pair: for long segments use metrics=("l2",).
     """
     pr = Privacy()
 
@@ -973,10 +933,11 @@ def compute_privacy_score(
         synthetic_data,
         normalize=normalize,
         length_normalize=length_normalize,
+        metrics=tuple(metrics),
     )
 
-    d_l2  = eff["l2"]["effect_size_d"]
-    d_dtw = eff["dtw"]["effect_size_d"]
+    d_l2  = eff["l2"]["effect_size_d"] if "l2" in eff else np.nan
+    d_dtw = eff["dtw"]["effect_size_d"] if "dtw" in eff else np.nan
 
     def effect_size_to_safety(d: float,
                               low: float = 0.0,
@@ -1024,9 +985,12 @@ def compute_privacy_score(
     if weights is not None:
         base_w.update(weights)
 
-    # Remove MIR weight if MIR is None
+    # Remove MIR weight if MIR is None, and any component that could not be computed
     if scores["mir"] is None:
         base_w.pop("mir", None)
+    base_w = {k: v for k, v in base_w.items() if scores[k] is not None and np.isfinite(scores[k])}
+    if not base_w:
+        raise RuntimeError("Privacy score could not be computed (no valid component).")
 
     # Normalise weights
     tot = sum(base_w.values())
@@ -1037,7 +1001,10 @@ def compute_privacy_score(
 
     print(f"Privacy Score (0–1, higher = safer): {privacy_score:.2f}")
     print(f"  - L2 safety score     : {scores['l2']:.2f} (from d_L2 = {d_l2:.2f})")
-    print(f"  - DTW safety score    : {scores['dtw']:.2f} (from d_DTW = {d_dtw:.2f})")
+    if np.isfinite(d_dtw):
+        print(f"  - DTW safety score    : {scores['dtw']:.2f} (from d_DTW = {d_dtw:.2f})")
+    else:
+        print("  - DTW safety score    : n/a (not computed: multichannel data or not in `metrics`)")
     if scores["mir"] is not None:
         print(f"  - MIR safety score    : {scores['mir']:.2f}")
     else:
