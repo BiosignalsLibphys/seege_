@@ -1,6 +1,11 @@
 import numpy as np
 from numpy.linalg import norm
 
+try:
+    from ._input import check_pair, as_signals, as_NCT
+except ImportError:  # flat layout (modules imported directly, not as the seege_ package)
+    from _input import check_pair, as_signals, as_NCT
+
 class SpatialFidelity:
     """
     Spatial fidelity based on channel-wise correlation matrix similarity.
@@ -22,7 +27,8 @@ class SpatialFidelity:
 
     Notes:
     ------
-    - Inputs can also be a single sample with shape (C, T); it will be expanded to (1, C, T).
+    - Inputs must be multichannel (N, C, T) with C >= 2. Spatial fidelity is not defined
+      for single-channel (N, T) data. For one segment use x[None] -> (1, C, T).
     """
 
     def __init__(self):
@@ -115,9 +121,9 @@ class SpatialFidelity:
         Parameters
         ----------
         real_data : array-like
-            Real data with shape (N_real, C, T) or single sample (C, T).
+            Real data with shape (N_real, C, T), C >= 2.
         synthetic_data : array-like
-            Synthetic data with shape (N_synth, C, T) or single sample (C, T).
+            Synthetic data with shape (N_synth, C, T), same C and T.
         mode : str, optional
             Currently kept for API consistency (default "all_vs_all").
             This implementation always computes:
@@ -135,8 +141,11 @@ class SpatialFidelity:
               "F_spatial": float }
         """
 
-        R = self._as_NCT(real_data, name="real_data", expected_C=None, expected_T=None)
-        S = self._as_NCT(synthetic_data, name="synthetic_data", expected_C=R.shape[1], expected_T=R.shape[2])
+        R, S = check_pair(real_data, synthetic_data)
+        if R.shape[1] < 2:
+            raise ValueError(
+                f"Spatial fidelity needs multichannel data (N, C, T) with C >= 2; got {np.shape(real_data)}. "
+                "It is not defined for single-channel (N, T) data.")
 
         nR, nS = R.shape[0], S.shape[0]
 
